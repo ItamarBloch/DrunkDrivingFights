@@ -1,0 +1,335 @@
+using UnityEngine;
+using UnityEngine.SceneManagement;
+using Mirror;
+using System.Collections.Generic;
+using System.Linq;
+
+public class GameNetworkRoomManager : NetworkRoomManager
+{
+    public static new GameNetworkRoomManager singleton { get; private set; }
+
+    [Header("Room Configuration")]
+    [SerializeField] private int defaultMaxPlayers = 6;
+
+    [Header("Map Registry")]
+    [Tooltip("Assign the MapRegistry ScriptableObject asset here")]
+    [SerializeField] private MapRegistry mapRegistry;
+
+    [HideInInspector] public string roomName = "New Room";
+    [HideInInspector] public string selectedMap = "";
+
+    private GameRoomDiscovery discovery;
+
+    // Events for UI
+    public event System.Action OnLobbyPlayersUpdated;
+    public event System.Action<string> OnRoomCreated;
+    public event System.Action OnGameStarting;
+    public event System.Action<string> OnJoinFailed;
+
+    // State
+    public bool IsOwner => NetworkServer.active && NetworkClient.isConnected;
+    public int CurrentPlayerCount => roomSlots.Count(s => s != null);
+    public bool AllPlayersReady
+    {
+        get
+        {
+            foreach (var slot in roomSlots)
+            {
+                if (slot == null) continue;
+                var lp = slot.GetComponent<LobbyPlayer>();
+                if (lp != null && lp.isRoomOwner) continue;
+                if (!slot.readyToBegin) return false;
+            }
+            return true;
+        }
+    }
+
+    /// <summary> The map registry — single source of truth for all maps. </summary>
+    public MapRegistry MapRegistry => mapRegistry;
+
+    // ─── Lifecycle ────────────────────────────────────────────────
+
+    public override void Awake()
+    {
+        if (singleton != null && singleton != this)
+        {
+            Destroy(gameObject);
+            return;
+        }
+        singleton = this;
+        DontDestroyOnLoad(gameObject);
+
+        // Transport — required before base.Awake
+        if (Transport.active == null)
+        {
+            var kcp = GetComponent<kcp2k.KcpTransport>();
+            if (kcp == null)
+                kcp = gameObject.AddComponent<kcp2k.KcpTransport>();
+            Transport.active = kcp;
+            transport = kcp;
+        }
+
+        // Discovery — set up early so it's ready for all callbacks
+        discovery = GetComponent<GameRoomDiscovery>();
+        if (discovery == null)
+            discovery = gameObject.AddComponent<GameRoomDiscovery>();
+
+        base.Awake();
+    }
+
+    public override void Start()
+    {
+        base.Start();
+        maxConnections = defaultMaxPlayers;
+        showRoomGUI = false;
+
+        // Validate map registry
+        if (mapRegistry == null)
+        {
+            Debug.LogError("[Lobby] MapRegistry not assigned! Right-click in Project → Create → Game → Map Registry, then assign it.");
+            return;
+        }
+
+        if (mapRegistry.Count == 0)
+        {
+            Debug.LogError("[Lobby] MapRegistry is empty! Add at least one map.");
+            return;
+        }
+
+        // Set default map to first in registry
+        selectedMap = mapRegistry.GetMap(0).sceneName;
+
+        // Validate all scenes exist in Build Settings (editor only)
+        mapRegistry.ValidateMaps();
+
+        Debug.Log($"[Lobby] Ready — {mapRegistry.Count} map(s) available");
+    }
+
+    // Suppress Mirror's built-in GUI completely
+    public override void OnGUI() { }
+
+    // ─── Room Actions ─────────────────────────────────────────────
+
+    /// <summary>
+    /// Create a room using a map index from the MapRegistry.
+    /// </summary>
+    public void CreateRoom(string name, int maxPlayers, int mapIndex)
+    {
+        MapData map = mapRegistry.GetMap(mapIndex);
+        if (map == null)
+        {
+            Debug.LogError($"[Lobby] Invalid map index: {mapIndex}");
+            return;
+        }
+
+        roomName = name;
+        maxConnections = Mathf.Clamp(maxPlayers, 2, map.maxPlayers);
+        selectedMap = map.displayName;
+        GameplayScene = map.sceneName;
+
+        Debug.Log($"[Lobby] Creating room '{roomName}' | Map: {map.displayName} ({map.sceneName}) | Max: {maxConnections}");
+
+        try
+        {
+            StartHost();
+            OnRoomCreated?.Invoke(roomName);
+        }
+        catch (System.Net.Sockets.SocketException e)
+        {
+            Debug.LogWarning($"[Lobby] Cannot host — port already in use: {e.Message}");
+            OnJoinFailed?.Invoke("Port already in use. A game is already running on this machine.");
+        }
+    }
+
+    public void QuickMatch()
+    {
+        Debug.Log("[Lobby] Quick match — searching...");
+
+        discovery.FindRooms((rooms) =>
+        {
+            var available = rooms.Where(r => r.currentPlayers < r.maxPlayers).ToList();
+
+            if (available.Count > 0)
+            {
+                var room = available[0];
+                Debug.Log($"[Lobby] Quick match — joining '{room.roomName}'");
+                JoinRoom(room.address, room.port);
+            }
+            else
+            {
+                // Try joining localhost first (same machine testing)
+                // If that fails, then try creating a new room
+                Debug.Log("[Lobby] Quick match — no rooms found, trying localhost...");
+                JoinRoom("localhost", 7777);
+            }
+        });
+    }
+
+    public void JoinRoom(string address, int port = 7777)
+    {
+        networkAddress = address;
+        var activeTransport = Transport.active;
+        if (activeTransport is kcp2k.KcpTransport kcpTransport)
+            kcpTransport.port = (ushort)port;
+
+        Debug.Log($"[Lobby] Joining room at {address}:{port}");
+        StartClient();
+    }
+
+    public void LeaveRoom()
+    {
+        if (IsOwner)
+        {
+            discovery.StopAdvertising();
+            StopHost();
+        }
+        else
+        {
+            StopClient();
+        }
+    }
+
+    public void StartGame()
+    {
+        if (!IsOwner) return;
+        if (!AllPlayersReady) { Debug.LogWarning("[Lobby] Not all players ready!"); return; }
+        if (CurrentPlayerCount < 1) return;
+
+        OnGameStarting?.Invoke();
+        discovery.StopAdvertising();
+        Debug.Log($"[Lobby] Starting game — {CurrentPlayerCount} players");
+        ServerChangeScene(GameplayScene);
+    }
+
+    // ─── Server Callbacks ─────────────────────────────────────────
+
+    public override void OnRoomStartServer()
+    {
+        base.OnRoomStartServer();
+        Debug.Log("[Lobby] Server started — beginning advertisement");
+        discovery?.AdvertiseRoom(roomName, maxConnections, selectedMap);
+    }
+
+    public override void OnRoomServerConnect(NetworkConnectionToClient conn)
+    {
+        base.OnRoomServerConnect(conn);
+        Debug.Log($"[Lobby] Player connected: {conn.connectionId}");
+        Invoke(nameof(FirePlayersUpdated), 0.3f);
+    }
+
+    public override void OnRoomServerDisconnect(NetworkConnectionToClient conn)
+    {
+        base.OnRoomServerDisconnect(conn);
+        Debug.Log($"[Lobby] Player disconnected: {conn.connectionId}");
+        Invoke(nameof(FirePlayersUpdated), 0.1f);
+    }
+
+    private void FirePlayersUpdated()
+    {
+        Debug.Log($"[Lobby] Players: {CurrentPlayerCount}/{maxConnections}");
+        OnLobbyPlayersUpdated?.Invoke();
+    }
+
+    public override GameObject OnRoomServerCreateRoomPlayer(NetworkConnectionToClient conn)
+    {
+        // Instantiate ourselves — base can return null in some Mirror versions
+        GameObject obj = Instantiate(roomPlayerPrefab.gameObject, Vector3.zero, Quaternion.identity);
+        if (obj == null)
+        {
+            Debug.LogError("[Lobby] Failed to instantiate room player!");
+            return null;
+        }
+
+        if (obj.TryGetComponent<LobbyPlayer>(out var lp))
+        {
+            lp.isRoomOwner = (conn.connectionId == 0);
+            // Sync room info to all clients via the player object
+            lp.syncedRoomName = roomName;
+            lp.syncedMapName = selectedMap;
+            lp.syncedMaxPlayers = maxConnections;
+
+            // Host is always considered ready via AllPlayersReady check
+            // (we skip owner in the ready check instead of setting the SyncVar)
+
+            Debug.Log($"[Lobby] Room player created | conn: {conn.connectionId} | owner: {lp.isRoomOwner}");
+        }
+
+        return obj;
+    }
+
+    public override GameObject OnRoomServerCreateGamePlayer(
+        NetworkConnectionToClient conn, GameObject roomPlayer)
+    {
+        LobbyPlayer lobby = roomPlayer != null ? roomPlayer.GetComponent<LobbyPlayer>() : null;
+
+        int index = lobby != null ? roomSlots.ToList().IndexOf(lobby) : conn.connectionId;
+        if (index < 0) index = conn.connectionId;
+
+        Vector3 spawnPos = GetSpawnPosition(index);
+        Quaternion spawnRot = Quaternion.Euler(0f, index * 60f, 0f);
+
+        GameObject car = Instantiate(playerPrefab.gameObject, spawnPos, spawnRot);
+
+        if (car.TryGetComponent<PlayerInfo>(out var info) && lobby != null)
+        {
+            info.playerName = lobby.playerName;
+            info.playerColor = lobby.playerColor;
+        }
+
+        return car;
+    }
+
+    private Vector3 GetSpawnPosition(int playerIndex)
+    {
+        float radius = 20f;
+        float angle = playerIndex * (360f / Mathf.Max(maxConnections, 1)) * Mathf.Deg2Rad;
+        return new Vector3(Mathf.Cos(angle) * radius, 1f, Mathf.Sin(angle) * radius);
+    }
+
+    // Don't auto-start — owner clicks Start
+    public override void OnRoomServerPlayersReady()
+    {
+        Debug.Log("[Lobby] All players ready — waiting for owner to start");
+        OnLobbyPlayersUpdated?.Invoke();
+    }
+
+    public override void OnRoomClientSceneChanged()
+    {
+        base.OnRoomClientSceneChanged();
+        OnLobbyPlayersUpdated?.Invoke();
+    }
+
+    public override void OnRoomClientConnect()
+    {
+        base.OnRoomClientConnect();
+        Debug.Log("[Lobby] Connected to room");
+    }
+
+    public override void OnRoomClientDisconnect()
+    {
+        base.OnRoomClientDisconnect();
+        Debug.Log("[Lobby] Disconnected from room");
+    }
+
+    public override void OnClientError(TransportError error, string reason)
+    {
+        base.OnClientError(error, reason);
+        OnJoinFailed?.Invoke($"Connection failed: {reason}");
+    }
+
+    // ─── Helpers ──────────────────────────────────────────────────
+
+    public List<LobbyPlayer> GetLobbyPlayers()
+    {
+        return roomSlots
+            .Where(s => s != null)
+            .Select(s => s.GetComponent<LobbyPlayer>())
+            .Where(lp => lp != null)
+            .ToList();
+    }
+
+    public void RefreshRoomList(System.Action<List<DiscoveredRoom>> callback)
+    {
+        discovery.FindRooms(callback);
+    }
+}
