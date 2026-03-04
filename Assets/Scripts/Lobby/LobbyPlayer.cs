@@ -1,17 +1,8 @@
 using UnityEngine;
 using Mirror;
 
-/// <summary>
-/// Represents a player in the lobby. Extends NetworkRoomPlayer to add
-/// custom synced data: name, color, owner status.
-/// 
-/// Attach this to a "LobbyPlayer" prefab (empty GameObject + NetworkIdentity + this script).
-/// Assign that prefab as RoomPlayerPrefab on GameNetworkRoomManager.
-/// </summary>
 public class LobbyPlayer : NetworkRoomPlayer
 {
-    // ─── Synced Player Data ───────────────────────────────────────
-    
     [SyncVar(hook = nameof(OnNameChanged))]
     public string playerName = "Player";
 
@@ -24,7 +15,16 @@ public class LobbyPlayer : NetworkRoomPlayer
     [SyncVar]
     public int playerSlot = -1;
 
-    // ─── Colors available for selection ───────────────────────────
+    // Room info synced from server to all clients
+    [SyncVar]
+    public string syncedRoomName = "";
+
+    [SyncVar]
+    public string syncedMapName = "";
+
+    [SyncVar]
+    public int syncedMaxPlayers = 6;
+
     public static readonly Color[] AvailableColors = new Color[]
     {
         new Color(0.9f, 0.2f, 0.2f),  // Red
@@ -35,22 +35,20 @@ public class LobbyPlayer : NetworkRoomPlayer
         new Color(0.7f, 0.2f, 0.9f),  // Purple
     };
 
-    // ─── Events ───────────────────────────────────────────────────
     public static event System.Action OnAnyPlayerDataChanged;
-
-    // ─── Lifecycle ────────────────────────────────────────────────
 
     public override void OnStartClient()
     {
         base.OnStartClient();
 
-        // Local player sets their name on join
+        // CRITICAL: Disable Mirror's built-in room player GUI
+        showRoomGUI = false;
+
         if (isOwned)
         {
             string name = PlayerPrefs.GetString("PlayerName", $"Player_{Random.Range(100, 999)}");
             CmdSetName(name);
 
-            // Pick a color based on our index
             int colorIndex = (int)(netId % (uint)AvailableColors.Length);
             CmdSetColor(AvailableColors[colorIndex]);
         }
@@ -58,17 +56,12 @@ public class LobbyPlayer : NetworkRoomPlayer
         NotifyUpdate();
     }
 
-    public override void OnStartServer()
-    {
-        base.OnStartServer();
-    }
-
-    // ─── Commands (client → server) ──────────────────────────────
+    // CRITICAL: Override OnGUI to prevent Mirror's default "Ready" button
+    public override void OnGUI() { }
 
     [Command]
     public void CmdSetName(string newName)
     {
-        // Sanitize: clamp length, strip tags
         playerName = newName.Length > 20 ? newName.Substring(0, 20) : newName;
     }
 
@@ -78,26 +71,26 @@ public class LobbyPlayer : NetworkRoomPlayer
         playerColor = newColor;
     }
 
-    [Command]
-    public void CmdToggleReady()
+    /// <summary>
+    /// Called by UI button. NOT a Command � it calls CmdChangeReadyState 
+    /// which IS Mirror's built-in Command for changing ready state.
+    /// Must be called on the client (isOwned).
+    /// </summary>
+    public void ToggleReady()
     {
-        // Owner doesn't need to ready up — they control start
+        if (!isOwned) return;
         if (isRoomOwner) return;
 
+        // CmdChangeReadyState is Mirror's built-in Command on NetworkRoomPlayer
         CmdChangeReadyState(!readyToBegin);
+        Debug.Log($"[Lobby] {playerName} toggling ready -> {!readyToBegin}");
     }
 
-    // ─── Ready State ──────────────────────────────────────────────
-
-    /// <summary>
-    /// Override to notify UI when ready state changes.
-    /// </summary>
     public override void ReadyStateChanged(bool oldReady, bool newReady)
     {
+        Debug.Log($"[Lobby] {playerName} ready state: {oldReady} -> {newReady}");
         NotifyUpdate();
     }
-
-    // ─── SyncVar Hooks ────────────────────────────────────────────
 
     private void OnNameChanged(string oldVal, string newVal) => NotifyUpdate();
     private void OnColorChanged(Color oldVal, Color newVal) => NotifyUpdate();
@@ -108,11 +101,6 @@ public class LobbyPlayer : NetworkRoomPlayer
         OnAnyPlayerDataChanged?.Invoke();
     }
 
-    // ─── Helpers ──────────────────────────────────────────────────
-
-    /// <summary>
-    /// Get the local LobbyPlayer instance.
-    /// </summary>
     public static LobbyPlayer LocalPlayer
     {
         get

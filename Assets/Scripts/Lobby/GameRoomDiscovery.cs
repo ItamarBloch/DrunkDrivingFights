@@ -4,10 +4,9 @@ using Mirror.Discovery;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Net;
 
-/// <summary>
-/// Data about a discovered room. Sent over LAN broadcast.
-/// </summary>
+// ─── Messages ─────────────────────────────────────────────────
 [Serializable]
 public class DiscoveredRoom
 {
@@ -21,17 +20,11 @@ public class DiscoveredRoom
     public DateTime lastSeen;
 }
 
-/// <summary>
-/// Discovery request — sent by clients searching for rooms.
-/// </summary>
 public struct RoomDiscoveryRequest : NetworkMessage
 {
-    // Empty is fine — we just need the broadcast trigger
+    // Empty — just a broadcast ping
 }
 
-/// <summary>
-/// Room discovery response sent from host → searching clients.
-/// </summary>
 public struct RoomDiscoveryResponse : NetworkMessage
 {
     public string roomName;
@@ -42,52 +35,36 @@ public struct RoomDiscoveryResponse : NetworkMessage
     public int port;
 }
 
-/// <summary>
-/// Handles LAN-based room discovery: broadcasting room existence 
-/// and finding available rooms.
-/// 
-/// For online play, you'd replace this with a web-based lobby service
-/// (e.g., Steam Lobbies, PlayFab Matchmaking, or a custom REST API).
-/// The GameNetworkRoomManager API stays the same either way.
-/// </summary>
+// ─── Discovery Component ──────────────────────────────────────
 public class GameRoomDiscovery : NetworkDiscoveryBase<RoomDiscoveryRequest, RoomDiscoveryResponse>
 {
-    // ─── State ────────────────────────────────────────────────────
-
     private readonly Dictionary<long, DiscoveredRoom> discoveredRooms = new();
     private bool isAdvertising = false;
 
     // Room info (set by host)
-    private string hostRoomName;
-    private int hostMaxPlayers;
-    private string hostMapName;
+    private string hostRoomName = "";
+    private int hostMaxPlayers = 6;
+    private string hostMapName = "";
 
-    // Search callback
+    // Search state
     private Action<List<DiscoveredRoom>> searchCallback;
-    private float searchTimeout = 2f;
     private float searchTimer = -1f;
 
-    // ─── Advertising (Host Side) ──────────────────────────────────
+    // ─── Host: Advertise ──────────────────────────────────────
 
-    /// <summary>
-    /// Start advertising this room on LAN.
-    /// </summary>
     public void AdvertiseRoom(string roomName, int maxPlayers, string mapName)
     {
         hostRoomName = roomName;
         hostMaxPlayers = maxPlayers;
         hostMapName = mapName;
+
+        // AdvertiseServer starts listening for client broadcasts and responding
+        AdvertiseServer();
         isAdvertising = true;
 
-        // Start the server broadcast
-        StartDiscovery();
-
-        Debug.Log($"[Discovery] Advertising room '{roomName}' on LAN");
+        Debug.Log($"[Discovery] Now advertising room '{roomName}' on LAN (port {secretHandshake})");
     }
 
-    /// <summary>
-    /// Stop advertising.
-    /// </summary>
     public void StopAdvertising()
     {
         if (isAdvertising)
@@ -98,22 +75,18 @@ public class GameRoomDiscovery : NetworkDiscoveryBase<RoomDiscoveryRequest, Room
         }
     }
 
-    // ─── Finding Rooms (Client Side) ──────────────────────────────
+    // ─── Client: Find Rooms ───────────────────────────────────
 
-    /// <summary>
-    /// Search for rooms on LAN. Callback fires after timeout with all found rooms.
-    /// </summary>
     public void FindRooms(Action<List<DiscoveredRoom>> callback, float timeout = 2f)
     {
         discoveredRooms.Clear();
         searchCallback = callback;
-        searchTimeout = timeout;
         searchTimer = timeout;
 
-        // Start listening for broadcasts
+        // StartDiscovery sends broadcast requests to find servers
         StartDiscovery();
 
-        Debug.Log("[Discovery] Searching for rooms...");
+        Debug.Log("[Discovery] Started searching for rooms...");
     }
 
     private void Update()
@@ -123,23 +96,17 @@ public class GameRoomDiscovery : NetworkDiscoveryBase<RoomDiscoveryRequest, Room
             searchTimer -= Time.deltaTime;
             if (searchTimer <= 0)
             {
-                // Search complete — fire callback
                 StopDiscovery();
                 var rooms = discoveredRooms.Values.ToList();
+                Debug.Log($"[Discovery] Search complete — found {rooms.Count} room(s)");
                 searchCallback?.Invoke(rooms);
                 searchCallback = null;
-
-                Debug.Log($"[Discovery] Search complete — found {rooms.Count} room(s)");
             }
         }
     }
 
-    /// <summary>
-    /// Get the current list of discovered rooms (useful for UI refresh).
-    /// </summary>
     public List<DiscoveredRoom> GetDiscoveredRooms()
     {
-        // Prune stale rooms (not seen in 10 seconds)
         var staleKeys = discoveredRooms
             .Where(kvp => (DateTime.Now - kvp.Value.lastSeen).TotalSeconds > 10)
             .Select(kvp => kvp.Key)
@@ -151,16 +118,56 @@ public class GameRoomDiscovery : NetworkDiscoveryBase<RoomDiscoveryRequest, Room
         return discoveredRooms.Values.ToList();
     }
 
-    // ─── Mirror Discovery Overrides ───────────────────────────────
+    // ─── Mirror Overrides (Client Side) ───────────────────────
 
     /// <summary>
-    /// Server: Build the response to send to searching clients.
+    /// CLIENT: Build the request to broadcast when searching.
+    /// This is REQUIRED — without it, no search packets are sent.
+    /// </summary>
+    protected override RoomDiscoveryRequest GetRequest()
+    {
+        return new RoomDiscoveryRequest();
+    }
+
+    /// <summary>
+    /// CLIENT: Process a response from a server.
+    /// Called when a host responds to our search broadcast.
+    /// </summary>
+    protected override void ProcessResponse(
+        RoomDiscoveryResponse response, IPEndPoint endpoint)
+    {
+        string address = endpoint.Address.ToString();
+
+        var room = new DiscoveredRoom
+        {
+            roomName = response.roomName,
+            address = address,
+            port = response.port,
+            currentPlayers = response.currentPlayers,
+            maxPlayers = response.maxPlayers,
+            mapName = response.mapName,
+            serverId = response.serverId,
+            lastSeen = DateTime.Now
+        };
+
+        discoveredRooms[response.serverId] = room;
+
+        Debug.Log($"[Discovery] Found room: '{room.roomName}' at {address}:{room.port} " +
+                  $"({room.currentPlayers}/{room.maxPlayers})");
+    }
+
+    // ─── Mirror Overrides (Server Side) ───────────────────────
+
+    /// <summary>
+    /// SERVER: Build the response to send back to searching clients.
     /// </summary>
     protected override RoomDiscoveryResponse ProcessRequest(
-        RoomDiscoveryRequest request, System.Net.IPEndPoint endpoint)
+        RoomDiscoveryRequest request, IPEndPoint endpoint)
     {
         var manager = GameNetworkRoomManager.singleton;
         int currentPlayers = manager != null ? manager.CurrentPlayerCount : 0;
+
+        Debug.Log($"[Discovery] Received search request from {endpoint.Address} — responding with room info");
 
         return new RoomDiscoveryResponse
         {
@@ -173,31 +180,7 @@ public class GameRoomDiscovery : NetworkDiscoveryBase<RoomDiscoveryRequest, Room
         };
     }
 
-    /// <summary>
-    /// Client: Process a room advertisement received from a host.
-    /// </summary>
-    protected override void ProcessResponse(
-        RoomDiscoveryResponse response, System.Net.IPEndPoint endpoint)
-    {
-        var room = new DiscoveredRoom
-        {
-            roomName = response.roomName,
-            address = endpoint.Address.ToString(),
-            port = response.port,
-            currentPlayers = response.currentPlayers,
-            maxPlayers = response.maxPlayers,
-            mapName = response.mapName,
-            serverId = response.serverId,
-            lastSeen = DateTime.Now
-        };
-
-        discoveredRooms[response.serverId] = room;
-
-        Debug.Log($"[Discovery] Found room: '{room.roomName}' at {room.address} " +
-                  $"({room.currentPlayers}/{room.maxPlayers})");
-    }
-
-    // ─── Helpers ──────────────────────────────────────────────────
+    // ─── Helpers ──────────────────────────────────────────────
 
     private int GetPort()
     {

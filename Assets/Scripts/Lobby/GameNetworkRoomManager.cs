@@ -4,50 +4,48 @@ using Mirror;
 using System.Collections.Generic;
 using System.Linq;
 
-/// <summary>
-/// Core lobby/room manager for the vehicular combat game.
-/// Extends Mirror's NetworkRoomManager to handle:
-/// - Room creation with settings (name, max players, map)
-/// - Quick match (auto-join or create)
-/// - Owner authority to start the game
-/// - Smooth lobby → game scene transition
-/// 
-/// Setup:
-/// 1. Create an empty GameObject in your Lobby scene, attach this script
-/// 2. Assign RoomPlayerPrefab (LobbyPlayer prefab) and GamePlayerPrefab (Car prefab)
-/// 3. Set RoomScene to your Lobby scene name and GameplayScene to your Game scene name
-/// 4. Both scenes must be in Build Settings
-/// </summary>
 public class GameNetworkRoomManager : NetworkRoomManager
 {
-    // ─── Singleton ────────────────────────────────────────────────
     public static new GameNetworkRoomManager singleton { get; private set; }
 
-    // ─── Room Settings (synced from host) ─────────────────────────
     [Header("Room Configuration")]
     [SerializeField] private int defaultMaxPlayers = 6;
-    [SerializeField] private string[] availableMaps = { "Arena_Desert", "Arena_City", "Arena_Factory" };
 
-    // Current room info (set by host before starting)
+    [Header("Map Registry")]
+    [Tooltip("Assign the MapRegistry ScriptableObject asset here")]
+    [SerializeField] private MapRegistry mapRegistry;
+
     [HideInInspector] public string roomName = "New Room";
-    [HideInInspector] public string selectedMap = "Arena_Desert";
+    [HideInInspector] public string selectedMap = "";
 
-    // ─── Room Discovery ───────────────────────────────────────────
-    // Rooms advertised on LAN — for online play you'd swap this
-    // for a relay/matchmaker service
     private GameRoomDiscovery discovery;
 
-    // ─── Events ───────────────────────────────────────────────────
+    // Events for UI
     public event System.Action OnLobbyPlayersUpdated;
     public event System.Action<string> OnRoomCreated;
     public event System.Action OnGameStarting;
     public event System.Action<string> OnJoinFailed;
 
-    // ─── State ────────────────────────────────────────────────────
-    public bool IsOwner => NetworkServer.active && NetworkClient.isConnected; // host = owner
+    // State
+    public bool IsOwner => NetworkServer.active && NetworkClient.isConnected;
     public int CurrentPlayerCount => roomSlots.Count(s => s != null);
-    public bool AllPlayersReady => roomSlots.All(s => s == null || s.readyToBegin);
-    public string[] AvailableMaps => availableMaps;
+    public bool AllPlayersReady
+    {
+        get
+        {
+            foreach (var slot in roomSlots)
+            {
+                if (slot == null) continue;
+                var lp = slot.GetComponent<LobbyPlayer>();
+                if (lp != null && lp.isRoomOwner) continue;
+                if (!slot.readyToBegin) return false;
+            }
+            return true;
+        }
+    }
+
+    /// <summary> The map registry — single source of truth for all maps. </summary>
+    public MapRegistry MapRegistry => mapRegistry;
 
     // ─── Lifecycle ────────────────────────────────────────────────
 
@@ -61,253 +59,245 @@ public class GameNetworkRoomManager : NetworkRoomManager
         singleton = this;
         DontDestroyOnLoad(gameObject);
 
+        // Transport — required before base.Awake
+        if (Transport.active == null)
+        {
+            var kcp = GetComponent<kcp2k.KcpTransport>();
+            if (kcp == null)
+                kcp = gameObject.AddComponent<kcp2k.KcpTransport>();
+            Transport.active = kcp;
+            transport = kcp;
+        }
+
+        // Discovery — set up early so it's ready for all callbacks
+        discovery = GetComponent<GameRoomDiscovery>();
+        if (discovery == null)
+            discovery = gameObject.AddComponent<GameRoomDiscovery>();
+
         base.Awake();
     }
 
     public override void Start()
     {
         base.Start();
-
         maxConnections = defaultMaxPlayers;
+        showRoomGUI = false;
 
-        // Setup discovery component (add programmatically if not present)
-        discovery = GetComponent<GameRoomDiscovery>();
-        if (discovery == null)
-            discovery = gameObject.AddComponent<GameRoomDiscovery>();
+        // Validate map registry
+        if (mapRegistry == null)
+        {
+            Debug.LogError("[Lobby] MapRegistry not assigned! Right-click in Project → Create → Game → Map Registry, then assign it.");
+            return;
+        }
+
+        if (mapRegistry.Count == 0)
+        {
+            Debug.LogError("[Lobby] MapRegistry is empty! Add at least one map.");
+            return;
+        }
+
+        // Set default map to first in registry
+        selectedMap = mapRegistry.GetMap(0).sceneName;
+
+        // Validate all scenes exist in Build Settings (editor only)
+        mapRegistry.ValidateMaps();
+
+        Debug.Log($"[Lobby] Ready — {mapRegistry.Count} map(s) available");
     }
 
-    // ─── Room Creation ────────────────────────────────────────────
+    // Suppress Mirror's built-in GUI completely
+    public override void OnGUI() { }
+
+    // ─── Room Actions ─────────────────────────────────────────────
 
     /// <summary>
-    /// Create a new room. The caller becomes the host/owner.
+    /// Create a room using a map index from the MapRegistry.
     /// </summary>
-    public void CreateRoom(string name, int maxPlayers, string map)
+    public void CreateRoom(string name, int maxPlayers, int mapIndex)
     {
+        MapData map = mapRegistry.GetMap(mapIndex);
+        if (map == null)
+        {
+            Debug.LogError($"[Lobby] Invalid map index: {mapIndex}");
+            return;
+        }
+
         roomName = name;
-        maxConnections = Mathf.Clamp(maxPlayers, 2, 12);
-        selectedMap = map;
+        maxConnections = Mathf.Clamp(maxPlayers, 2, map.maxPlayers);
+        selectedMap = map.displayName;
+        GameplayScene = map.sceneName;
 
-        // Set the gameplay scene based on map selection
-        // (In production you'd map names → scene names)
-        GameplayScene = map;
+        Debug.Log($"[Lobby] Creating room '{roomName}' | Map: {map.displayName} ({map.sceneName}) | Max: {maxConnections}");
 
-        // Start hosting
-        StartHost();
-
-        // Start advertising this room on LAN
-        discovery.AdvertiseRoom(roomName, maxConnections, selectedMap);
-
-        OnRoomCreated?.Invoke(roomName);
-
-        Debug.Log($"[Lobby] Room '{roomName}' created | Map: {map} | Max: {maxPlayers}");
+        try
+        {
+            StartHost();
+            OnRoomCreated?.Invoke(roomName);
+        }
+        catch (System.Net.Sockets.SocketException e)
+        {
+            Debug.LogWarning($"[Lobby] Cannot host — port already in use: {e.Message}");
+            OnJoinFailed?.Invoke("Port already in use. A game is already running on this machine.");
+        }
     }
 
-    /// <summary>
-    /// Quick Match: find an available room and join, or create one.
-    /// </summary>
     public void QuickMatch()
     {
-        Debug.Log("[Lobby] Quick match — searching for rooms...");
+        Debug.Log("[Lobby] Quick match — searching...");
 
         discovery.FindRooms((rooms) =>
         {
-            // Filter to rooms that aren't full
             var available = rooms.Where(r => r.currentPlayers < r.maxPlayers).ToList();
 
             if (available.Count > 0)
             {
-                // Join the first available room
                 var room = available[0];
-                JoinRoom(room.address, room.port);
                 Debug.Log($"[Lobby] Quick match — joining '{room.roomName}'");
+                JoinRoom(room.address, room.port);
             }
             else
             {
-                // No rooms found — create one with defaults
-                string autoName = $"Game_{System.DateTime.Now:HHmmss}";
-                CreateRoom(autoName, defaultMaxPlayers, availableMaps[0]);
-                Debug.Log("[Lobby] Quick match — no rooms found, created new room");
+                // Try joining localhost first (same machine testing)
+                // If that fails, then try creating a new room
+                Debug.Log("[Lobby] Quick match — no rooms found, trying localhost...");
+                JoinRoom("localhost", 7777);
             }
         });
     }
 
-    /// <summary>
-    /// Join a specific room by address.
-    /// </summary>
     public void JoinRoom(string address, int port = 7777)
     {
         networkAddress = address;
-
-        // If using KCP transport (Mirror default), set the port
-        var transport = Transport.active;
-        if (transport is kcp2k.KcpTransport kcpTransport)
+        var activeTransport = Transport.active;
+        if (activeTransport is kcp2k.KcpTransport kcpTransport)
             kcpTransport.port = (ushort)port;
 
-        StartClient();
         Debug.Log($"[Lobby] Joining room at {address}:{port}");
+        StartClient();
     }
 
-    /// <summary>
-    /// Leave the current room. Host leaving destroys the room.
-    /// </summary>
     public void LeaveRoom()
     {
         if (IsOwner)
         {
             discovery.StopAdvertising();
             StopHost();
-            Debug.Log("[Lobby] Host left — room closed");
         }
         else
         {
             StopClient();
-            Debug.Log("[Lobby] Left room");
         }
     }
 
-    /// <summary>
-    /// Owner starts the game — transitions everyone to the game scene.
-    /// </summary>
     public void StartGame()
     {
-        if (!IsOwner)
-        {
-            Debug.LogWarning("[Lobby] Only the room owner can start the game!");
-            return;
-        }
-
-        if (!AllPlayersReady)
-        {
-            Debug.LogWarning("[Lobby] Not all players are ready!");
-            return;
-        }
-
-        if (CurrentPlayerCount < 1)
-        {
-            Debug.LogWarning("[Lobby] Need at least 1 player to start!");
-            return;
-        }
+        if (!IsOwner) return;
+        if (!AllPlayersReady) { Debug.LogWarning("[Lobby] Not all players ready!"); return; }
+        if (CurrentPlayerCount < 1) return;
 
         OnGameStarting?.Invoke();
         discovery.StopAdvertising();
-
-        Debug.Log($"[Lobby] Starting game on map '{selectedMap}' with {CurrentPlayerCount} players");
-
-        // This triggers Mirror's room → game scene transition
-        // All room players get replaced with game players (car prefabs)
+        Debug.Log($"[Lobby] Starting game — {CurrentPlayerCount} players");
         ServerChangeScene(GameplayScene);
     }
 
-    // ─── Mirror Room Callbacks ────────────────────────────────────
+    // ─── Server Callbacks ─────────────────────────────────────────
 
-    /// <summary>
-    /// Called on server when a new player connects to the room.
-    /// </summary>
+    public override void OnRoomStartServer()
+    {
+        base.OnRoomStartServer();
+        Debug.Log("[Lobby] Server started — beginning advertisement");
+        discovery?.AdvertiseRoom(roomName, maxConnections, selectedMap);
+    }
+
     public override void OnRoomServerConnect(NetworkConnectionToClient conn)
     {
         base.OnRoomServerConnect(conn);
         Debug.Log($"[Lobby] Player connected: {conn.connectionId}");
+        Invoke(nameof(FirePlayersUpdated), 0.3f);
     }
 
-    /// <summary>
-    /// Called on server when a player disconnects from the room.
-    /// </summary>
     public override void OnRoomServerDisconnect(NetworkConnectionToClient conn)
     {
         base.OnRoomServerDisconnect(conn);
         Debug.Log($"[Lobby] Player disconnected: {conn.connectionId}");
+        Invoke(nameof(FirePlayersUpdated), 0.1f);
+    }
 
-        // Notify UI
+    private void FirePlayersUpdated()
+    {
+        Debug.Log($"[Lobby] Players: {CurrentPlayerCount}/{maxConnections}");
         OnLobbyPlayersUpdated?.Invoke();
     }
 
-    /// <summary>
-    /// Called on server when a room player is created.
-    /// We use this to assign ownership info.
-    /// </summary>
     public override GameObject OnRoomServerCreateRoomPlayer(NetworkConnectionToClient conn)
     {
-        // Use base behavior to instantiate the RoomPlayerPrefab
-        GameObject roomPlayerObj = base.OnRoomServerCreateRoomPlayer(conn);
-
-        // Mark the first player (host) as the room owner
-        if (roomPlayerObj.TryGetComponent<LobbyPlayer>(out var lobbyPlayer))
+        // Instantiate ourselves — base can return null in some Mirror versions
+        GameObject obj = Instantiate(roomPlayerPrefab.gameObject, Vector3.zero, Quaternion.identity);
+        if (obj == null)
         {
-            // Connection 0 is always the host
-            lobbyPlayer.isRoomOwner = (conn.connectionId == 0);
+            Debug.LogError("[Lobby] Failed to instantiate room player!");
+            return null;
         }
 
-        return roomPlayerObj;
+        if (obj.TryGetComponent<LobbyPlayer>(out var lp))
+        {
+            lp.isRoomOwner = (conn.connectionId == 0);
+            // Sync room info to all clients via the player object
+            lp.syncedRoomName = roomName;
+            lp.syncedMapName = selectedMap;
+            lp.syncedMaxPlayers = maxConnections;
+
+            // Host is always considered ready via AllPlayersReady check
+            // (we skip owner in the ready check instead of setting the SyncVar)
+
+            Debug.Log($"[Lobby] Room player created | conn: {conn.connectionId} | owner: {lp.isRoomOwner}");
+        }
+
+        return obj;
     }
 
-    /// <summary>
-    /// Called on server when a game player needs to be created for a room player.
-    /// This is where room player → car player conversion happens.
-    /// </summary>
     public override GameObject OnRoomServerCreateGamePlayer(
         NetworkConnectionToClient conn, GameObject roomPlayer)
     {
-        // Get the lobby player's chosen data
-        LobbyPlayer lobby = roomPlayer.GetComponent<LobbyPlayer>();
+        LobbyPlayer lobby = roomPlayer != null ? roomPlayer.GetComponent<LobbyPlayer>() : null;
 
-        // Calculate a spawn position (spread players out)
-        int index = roomSlots.ToList().IndexOf(lobby);
+        int index = lobby != null ? roomSlots.ToList().IndexOf(lobby) : conn.connectionId;
+        if (index < 0) index = conn.connectionId;
+
         Vector3 spawnPos = GetSpawnPosition(index);
         Quaternion spawnRot = Quaternion.Euler(0f, index * 60f, 0f);
 
-        // Instantiate the game player (car prefab)
-        GameObject carPlayer = Instantiate(
-            playerPrefab.gameObject, spawnPos, spawnRot);
+        GameObject car = Instantiate(playerPrefab.gameObject, spawnPos, spawnRot);
 
-        // Transfer lobby data to the car if needed
-        // (e.g., player name, color, team)
-        if (carPlayer.TryGetComponent<PlayerInfo>(out var playerInfo) && lobby != null)
+        if (car.TryGetComponent<PlayerInfo>(out var info) && lobby != null)
         {
-            playerInfo.playerName = lobby.playerName;
-            playerInfo.playerColor = lobby.playerColor;
+            info.playerName = lobby.playerName;
+            info.playerColor = lobby.playerColor;
         }
 
-        Debug.Log($"[Game] Spawned car for player '{lobby?.playerName}' at {spawnPos}");
-
-        return carPlayer;
+        return car;
     }
 
-    /// <summary>
-    /// Calculate spawn positions in a circle around the arena center.
-    /// </summary>
     private Vector3 GetSpawnPosition(int playerIndex)
     {
         float radius = 20f;
         float angle = playerIndex * (360f / Mathf.Max(maxConnections, 1)) * Mathf.Deg2Rad;
-        return new Vector3(
-            Mathf.Cos(angle) * radius,
-            1f, // slightly above ground
-            Mathf.Sin(angle) * radius
-        );
+        return new Vector3(Mathf.Cos(angle) * radius, 1f, Mathf.Sin(angle) * radius);
     }
 
-    /// <summary>
-    /// Called on server when all players are ready. 
-    /// We override to NOT auto-start — owner must manually press Start.
-    /// </summary>
+    // Don't auto-start — owner clicks Start
     public override void OnRoomServerPlayersReady()
     {
-        // Do NOT call base — base auto-starts the game
-        // We want the owner to manually start
-        Debug.Log("[Lobby] All players are ready! Waiting for owner to start.");
+        Debug.Log("[Lobby] All players ready — waiting for owner to start");
         OnLobbyPlayersUpdated?.Invoke();
     }
 
-    /// <summary>
-    /// Called on every client when the room player list changes.
-    /// </summary>
     public override void OnRoomClientSceneChanged()
     {
         base.OnRoomClientSceneChanged();
         OnLobbyPlayersUpdated?.Invoke();
     }
-
-    // ─── Client Callbacks ─────────────────────────────────────────
 
     public override void OnRoomClientConnect()
     {
@@ -325,14 +315,10 @@ public class GameNetworkRoomManager : NetworkRoomManager
     {
         base.OnClientError(error, reason);
         OnJoinFailed?.Invoke($"Connection failed: {reason}");
-        Debug.LogError($"[Lobby] Client error: {error} — {reason}");
     }
 
     // ─── Helpers ──────────────────────────────────────────────────
 
-    /// <summary>
-    /// Get all current lobby players.
-    /// </summary>
     public List<LobbyPlayer> GetLobbyPlayers()
     {
         return roomSlots
@@ -342,9 +328,6 @@ public class GameNetworkRoomManager : NetworkRoomManager
             .ToList();
     }
 
-    /// <summary>
-    /// Refresh available rooms (calls discovery).
-    /// </summary>
     public void RefreshRoomList(System.Action<List<DiscoveredRoom>> callback)
     {
         discovery.FindRooms(callback);

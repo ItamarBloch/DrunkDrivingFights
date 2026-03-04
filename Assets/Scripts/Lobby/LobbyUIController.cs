@@ -4,20 +4,8 @@ using TMPro;
 using Mirror;
 using System.Collections.Generic;
 
-/// <summary>
-/// Lobby UI Controller — handles all lobby screen logic.
-/// 
-/// BUILD THE UI IN THE EDITOR, then drag references into the Inspector.
-/// This script does NOT create any UI objects — it only controls them.
-/// 
-/// Attach to the LobbyCanvas (or any persistent object in the Lobby scene).
-/// </summary>
 public class LobbyUIController : MonoBehaviour
 {
-    // ═══════════════════════════════════════════════════════════════
-    // INSPECTOR REFERENCES — drag your UI elements here
-    // ═══════════════════════════════════════════════════════════════
-
     [Header("=== PANELS ===")]
     [SerializeField] private GameObject mainMenuPanel;
     [SerializeField] private GameObject roomBrowserPanel;
@@ -33,9 +21,13 @@ public class LobbyUIController : MonoBehaviour
     [Header("=== ROOM BROWSER ===")]
     [SerializeField] private Button backButton_Browser;
     [SerializeField] private Button refreshButton;
-    [SerializeField] private Transform roomListContent;       // The "Content" inside the ScrollView
+    [SerializeField] private Transform roomListContent;
     [SerializeField] private TextMeshProUGUI browserStatusText;
-    [SerializeField] private GameObject roomEntryPrefab;      // Prefab or disabled template for room entries
+    [SerializeField] private GameObject roomEntryPrefab;
+
+    [Header("=== JOIN BY IP (for same-machine testing) ===")]
+    [SerializeField] private TMP_InputField joinIPInput;
+    [SerializeField] private Button joinIPButton;
 
     [Header("=== CREATE ROOM ===")]
     [SerializeField] private Button backButton_Create;
@@ -48,112 +40,89 @@ public class LobbyUIController : MonoBehaviour
     [SerializeField] private TextMeshProUGUI roomNameText;
     [SerializeField] private TextMeshProUGUI mapInfoText;
     [SerializeField] private TextMeshProUGUI playerCountText;
-    [SerializeField] private Transform playerListContent;     // The "Content" inside the PlayerList ScrollView
+    [SerializeField] private Transform playerListContent;
     [SerializeField] private Button leaveButton;
     [SerializeField] private Button readyButton;
     [SerializeField] private Button startGameButton;
 
-    [Header("=== PLAYER ENTRY (for lobby player list) ===")]
-    [Tooltip("A small prefab/template with: ColorImage, NameText, StatusText")]
-    [SerializeField] private GameObject playerEntryPrefab;    // Prefab or disabled template for player entries
+    [Header("=== PREFABS ===")]
+    [SerializeField] private GameObject playerEntryPrefab;
 
-    // ─── State ────────────────────────────────────────────────────
     private enum Screen { MainMenu, RoomBrowser, CreateRoom, InLobby }
     private GameNetworkRoomManager manager;
-
-    // ═══════════════════════════════════════════════════════════════
-    // LIFECYCLE
-    // ═══════════════════════════════════════════════════════════════
 
     private void Start()
     {
         manager = GameNetworkRoomManager.singleton;
-
         if (manager == null)
         {
             Debug.LogError("[LobbyUI] GameNetworkRoomManager not found!");
             return;
         }
 
-        // Load saved player name
         string savedName = PlayerPrefs.GetString("PlayerName", $"Player_{Random.Range(100, 999)}");
-        if (playerNameInput != null)
-            playerNameInput.text = savedName;
+        if (playerNameInput != null) playerNameInput.text = savedName;
 
-        // Populate dropdowns
         SetupDropdowns();
-
-        // Wire up all buttons
         WireButtons();
-
-        // Subscribe to network events
         SubscribeEvents();
-
-        // Start on main menu
         ShowScreen(Screen.MainMenu);
     }
 
-    private void OnDestroy()
-    {
-        UnsubscribeEvents();
-    }
+    private void OnDestroy() { UnsubscribeEvents(); }
 
     private void Update()
     {
-        // Auto-switch to lobby when connected as client
-        if (roomBrowserPanel.activeSelf && NetworkClient.isConnected)
+        // Auto-switch to lobby when we become connected (from any screen)
+        bool isInLobbyScreen = inLobbyPanel != null && inLobbyPanel.activeSelf;
+        bool isConnected = NetworkClient.isConnected;
+
+        if (!isInLobbyScreen && isConnected)
+        {
+            Debug.Log("[LobbyUI] Connected detected — switching to InLobby screen");
             ShowScreen(Screen.InLobby);
+        }
 
         // Auto-switch back to main menu if disconnected while in lobby
-        if (inLobbyPanel.activeSelf && !NetworkClient.isConnected && !NetworkServer.active)
+        if (isInLobbyScreen && !isConnected && !NetworkServer.active)
             ShowScreen(Screen.MainMenu);
 
         // Update ready button text dynamically
-        if (inLobbyPanel.activeSelf)
+        if (isInLobbyScreen)
             UpdateReadyButtonVisual();
     }
 
-    // ═══════════════════════════════════════════════════════════════
-    // SETUP
-    // ═══════════════════════════════════════════════════════════════
-
     private void SetupDropdowns()
     {
-        // Max Players: 2, 4, 6, 8
         if (maxPlayersDropdown != null)
         {
             maxPlayersDropdown.ClearOptions();
             maxPlayersDropdown.AddOptions(new List<string> { "2 Players", "4 Players", "6 Players", "8 Players" });
-            maxPlayersDropdown.value = 2; // Default: 6 players
+            maxPlayersDropdown.value = 2;
         }
 
-        // Maps from the manager
-        if (mapDropdown != null && manager != null)
+        // Populate map dropdown from the MapRegistry (single source of truth)
+        if (mapDropdown != null && manager != null && manager.MapRegistry != null)
         {
             mapDropdown.ClearOptions();
-            mapDropdown.AddOptions(new List<string>(manager.AvailableMaps));
+            mapDropdown.AddOptions(manager.MapRegistry.GetDisplayNames());
         }
     }
 
     private void WireButtons()
     {
-        // Main Menu
         quickMatchButton?.onClick.AddListener(OnQuickMatch);
         browseGamesButton?.onClick.AddListener(() => ShowScreen(Screen.RoomBrowser));
         createGameButton?.onClick.AddListener(() => ShowScreen(Screen.CreateRoom));
-
-        // Save name when changed
         playerNameInput?.onEndEdit.AddListener((val) => PlayerPrefs.SetString("PlayerName", val));
 
-        // Room Browser
         backButton_Browser?.onClick.AddListener(() => ShowScreen(Screen.MainMenu));
         refreshButton?.onClick.AddListener(RefreshRoomList);
+        joinIPButton?.onClick.AddListener(OnJoinByIP);
 
-        // Create Room
         backButton_Create?.onClick.AddListener(() => ShowScreen(Screen.MainMenu));
         createRoomButton?.onClick.AddListener(OnCreateRoom);
 
-        // In Lobby
         leaveButton?.onClick.AddListener(OnLeaveRoom);
         readyButton?.onClick.AddListener(OnToggleReady);
         startGameButton?.onClick.AddListener(OnStartGame);
@@ -164,8 +133,8 @@ public class LobbyUIController : MonoBehaviour
         if (manager != null)
         {
             manager.OnLobbyPlayersUpdated += RefreshLobbyPlayers;
-            manager.OnRoomCreated += OnRoomCreated;
-            manager.OnJoinFailed += OnJoinFailed;
+            manager.OnRoomCreated += (name) => ShowScreen(Screen.InLobby);
+            manager.OnJoinFailed += (msg) => { Debug.LogWarning(msg); ShowScreen(Screen.MainMenu); };
         }
         LobbyPlayer.OnAnyPlayerDataChanged += RefreshLobbyPlayers;
     }
@@ -175,33 +144,24 @@ public class LobbyUIController : MonoBehaviour
         if (manager != null)
         {
             manager.OnLobbyPlayersUpdated -= RefreshLobbyPlayers;
-            manager.OnRoomCreated -= OnRoomCreated;
-            manager.OnJoinFailed -= OnJoinFailed;
         }
         LobbyPlayer.OnAnyPlayerDataChanged -= RefreshLobbyPlayers;
     }
 
-    // ═══════════════════════════════════════════════════════════════
-    // SCREEN MANAGEMENT
-    // ═══════════════════════════════════════════════════════════════
+    // ─── Screen Management ────────────────────────────────────
 
     private void ShowScreen(Screen screen)
     {
-        mainMenuPanel.SetActive(screen == Screen.MainMenu);
-        roomBrowserPanel.SetActive(screen == Screen.RoomBrowser);
-        createRoomPanel.SetActive(screen == Screen.CreateRoom);
-        inLobbyPanel.SetActive(screen == Screen.InLobby);
+        if (mainMenuPanel != null) mainMenuPanel.SetActive(screen == Screen.MainMenu);
+        if (roomBrowserPanel != null) roomBrowserPanel.SetActive(screen == Screen.RoomBrowser);
+        if (createRoomPanel != null) createRoomPanel.SetActive(screen == Screen.CreateRoom);
+        if (inLobbyPanel != null) inLobbyPanel.SetActive(screen == Screen.InLobby);
 
-        if (screen == Screen.RoomBrowser)
-            RefreshRoomList();
-
-        if (screen == Screen.InLobby)
-            RefreshLobbyPlayers();
+        if (screen == Screen.RoomBrowser) RefreshRoomList();
+        if (screen == Screen.InLobby) RefreshLobbyPlayers();
     }
 
-    // ═══════════════════════════════════════════════════════════════
-    // BUTTON ACTIONS
-    // ═══════════════════════════════════════════════════════════════
+    // ─── Button Actions ───────────────────────────────────────
 
     private void OnQuickMatch()
     {
@@ -212,12 +172,10 @@ public class LobbyUIController : MonoBehaviour
     private void OnCreateRoom()
     {
         SavePlayerName();
-
-        string roomName = roomNameInput != null ? roomNameInput.text : $"Room_{Random.Range(100, 999)}";
-        int maxPlayers = (maxPlayersDropdown.value + 1) * 2; // index 0=2, 1=4, 2=6, 3=8
-        string map = manager.AvailableMaps[mapDropdown.value];
-
-        manager.CreateRoom(roomName, maxPlayers, map);
+        string name = roomNameInput != null ? roomNameInput.text : $"Room_{Random.Range(100, 999)}";
+        int maxPlayers = (maxPlayersDropdown.value + 1) * 2;
+        int mapIndex = mapDropdown != null ? mapDropdown.value : 0;
+        manager.CreateRoom(name, maxPlayers, mapIndex);
     }
 
     private void OnLeaveRoom()
@@ -226,11 +184,19 @@ public class LobbyUIController : MonoBehaviour
         ShowScreen(Screen.MainMenu);
     }
 
+    private void OnJoinByIP()
+    {
+        SavePlayerName();
+        string ip = joinIPInput != null ? joinIPInput.text.Trim() : "localhost";
+        if (string.IsNullOrEmpty(ip)) ip = "localhost";
+        Debug.Log($"[LobbyUI] Joining by IP: {ip}");
+        manager.JoinRoom(ip, 7777);
+    }
+
     private void OnToggleReady()
     {
         var local = LobbyPlayer.LocalPlayer;
-        if (local != null)
-            local.CmdToggleReady();
+        if (local != null) local.ToggleReady();
     }
 
     private void OnStartGame()
@@ -238,45 +204,42 @@ public class LobbyUIController : MonoBehaviour
         manager.StartGame();
     }
 
-    private void OnRoomCreated(string name)
-    {
-        ShowScreen(Screen.InLobby);
-    }
-
-    private void OnJoinFailed(string message)
-    {
-        Debug.LogWarning($"[LobbyUI] Join failed: {message}");
-        ShowScreen(Screen.MainMenu);
-    }
-
-    // ═══════════════════════════════════════════════════════════════
-    // ROOM BROWSER
-    // ═══════════════════════════════════════════════════════════════
+    // ─── Room Browser ─────────────────────────────────────────
 
     private void RefreshRoomList()
     {
-        if (browserStatusText != null)
-            browserStatusText.text = "Searching for rooms...";
-
+        if (browserStatusText != null) browserStatusText.text = "Searching for rooms...";
         ClearChildren(roomListContent);
 
         manager.RefreshRoomList((rooms) =>
         {
             ClearChildren(roomListContent);
 
+            // Always add a localhost option for same-machine testing
+            var localhostRoom = new DiscoveredRoom
+            {
+                roomName = "Local Game (this PC)",
+                address = "localhost",
+                port = 7777,
+                currentPlayers = 0,
+                maxPlayers = 0,
+                mapName = "Direct Connect - localhost:7777",
+                serverId = -1
+            };
+            CreateRoomEntry(localhostRoom);
+
             if (rooms.Count == 0)
             {
                 if (browserStatusText != null)
-                    browserStatusText.text = "No rooms found. Create one or try Quick Match!";
-                return;
+                    browserStatusText.text = "No LAN rooms found. Use localhost for same-PC testing.";
             }
-
-            if (browserStatusText != null)
-                browserStatusText.text = $"Found {rooms.Count} room(s)";
-
-            foreach (var room in rooms)
+            else
             {
-                CreateRoomEntry(room);
+                if (browserStatusText != null)
+                    browserStatusText.text = $"Found {rooms.Count} room(s)";
+
+                foreach (var room in rooms)
+                    CreateRoomEntry(room);
             }
         });
     }
@@ -288,73 +251,65 @@ public class LobbyUIController : MonoBehaviour
         GameObject entry = Instantiate(roomEntryPrefab, roomListContent);
         entry.SetActive(true);
 
-        // Find child elements by name
-        // Expected children: RoomEntryName (TMP), RoomEntryDetails (TMP), JoinButton (Button)
         var nameText = FindChildTMP(entry, "RoomEntryName");
         var detailsText = FindChildTMP(entry, "RoomEntryDetails");
         var joinButton = FindChildButton(entry, "JoinButton");
 
-        if (nameText != null)
-            nameText.text = room.roomName;
-
-        if (detailsText != null)
-            detailsText.text = $"{room.mapName} | {room.currentPlayers}/{room.maxPlayers} players";
+        if (nameText != null) nameText.text = room.roomName;
+        if (detailsText != null) detailsText.text = $"{room.mapName} | {room.currentPlayers}/{room.maxPlayers} players";
 
         if (joinButton != null)
         {
-            bool isFull = room.currentPlayers >= room.maxPlayers;
+            bool isFull = room.maxPlayers > 0 && room.currentPlayers >= room.maxPlayers;
             joinButton.interactable = !isFull;
-
-            // Update join button text
             var joinText = joinButton.GetComponentInChildren<TextMeshProUGUI>();
-            if (joinText != null)
-                joinText.text = isFull ? "FULL" : "JOIN";
+            if (joinText != null) joinText.text = isFull ? "FULL" : "JOIN";
 
-            // Capture for closure
             string address = room.address;
             int port = room.port;
             joinButton.onClick.AddListener(() => manager.JoinRoom(address, port));
         }
     }
 
-    // ═══════════════════════════════════════════════════════════════
-    // IN-LOBBY PLAYER LIST
-    // ═══════════════════════════════════════════════════════════════
+    // ─── Lobby Player List ────────────────────────────────────
 
     private void RefreshLobbyPlayers()
     {
-        if (!inLobbyPanel.activeSelf) return;
+        if (inLobbyPanel == null || !inLobbyPanel.activeSelf) return;
 
-        // Update header info
-        if (roomNameText != null)
-            roomNameText.text = manager.roomName.ToUpper();
+        // Get room info — host reads from manager, clients read from synced player data
+        string displayRoomName = manager.roomName;
+        string displayMap = manager.selectedMap;
+        int displayMax = manager.maxConnections;
 
-        if (mapInfoText != null)
-            mapInfoText.text = $"Map: {manager.selectedMap}";
-
-        if (playerCountText != null)
-            playerCountText.text = $"Players: {manager.CurrentPlayerCount}/{manager.maxConnections}";
-
-        // Rebuild player list
-        ClearChildren(playerListContent);
-
-        var players = manager.GetLobbyPlayers();
-        foreach (var player in players)
+        // If we're a client (not host), get room info from any LobbyPlayer's synced data
+        if (!manager.IsOwner)
         {
-            CreatePlayerEntry(player);
+            var players = manager.GetLobbyPlayers();
+            if (players.Count > 0)
+            {
+                displayRoomName = players[0].syncedRoomName;
+                displayMap = players[0].syncedMapName;
+                displayMax = players[0].syncedMaxPlayers;
+            }
         }
 
-        // Show/hide owner-only buttons
+        if (roomNameText != null) roomNameText.text = displayRoomName.ToUpper();
+        if (mapInfoText != null) mapInfoText.text = $"Map: {displayMap}";
+        if (playerCountText != null) playerCountText.text = $"Players: {manager.CurrentPlayerCount}/{displayMax}";
+
+        ClearChildren(playerListContent);
+
+        var allPlayers = manager.GetLobbyPlayers();
+        foreach (var player in allPlayers)
+            CreatePlayerEntry(player);
+
         var localPlayer = LobbyPlayer.LocalPlayer;
         bool isOwner = localPlayer != null && localPlayer.isRoomOwner;
 
-        if (startGameButton != null)
-            startGameButton.gameObject.SetActive(isOwner);
+        if (startGameButton != null) startGameButton.gameObject.SetActive(isOwner);
+        if (readyButton != null) readyButton.gameObject.SetActive(!isOwner);
 
-        if (readyButton != null)
-            readyButton.gameObject.SetActive(!isOwner);
-
-        // Owner can only start when all are ready
         if (isOwner && startGameButton != null)
         {
             bool canStart = manager.AllPlayersReady && manager.CurrentPlayerCount >= 1;
@@ -369,13 +324,11 @@ public class LobbyUIController : MonoBehaviour
         GameObject entry = Instantiate(playerEntryPrefab, playerListContent);
         entry.SetActive(true);
 
-        // Expected children: ColorImage (Image), NameText (TMP), StatusText (TMP)
         var colorImage = FindChildImage(entry, "ColorImage");
         var nameText = FindChildTMP(entry, "NameText");
         var statusText = FindChildTMP(entry, "StatusText");
 
-        if (colorImage != null)
-            colorImage.color = player.playerColor;
+        if (colorImage != null) colorImage.color = player.playerColor;
 
         if (nameText != null)
         {
@@ -390,17 +343,17 @@ public class LobbyUIController : MonoBehaviour
             if (player.isRoomOwner)
             {
                 statusText.text = "OWNER";
-                statusText.color = new Color(1f, 0.85f, 0.3f); // Yellow
+                statusText.color = new Color(1f, 0.85f, 0.3f);
             }
             else if (player.readyToBegin)
             {
                 statusText.text = "READY";
-                statusText.color = new Color(0.2f, 0.8f, 0.4f); // Green
+                statusText.color = new Color(0.2f, 0.8f, 0.4f);
             }
             else
             {
                 statusText.text = "NOT READY";
-                statusText.color = new Color(0.9f, 0.3f, 0.3f); // Red
+                statusText.color = new Color(0.9f, 0.3f, 0.3f);
             }
         }
     }
@@ -409,15 +362,11 @@ public class LobbyUIController : MonoBehaviour
     {
         var local = LobbyPlayer.LocalPlayer;
         if (local == null || local.isRoomOwner || readyButton == null) return;
-
         var text = readyButton.GetComponentInChildren<TextMeshProUGUI>();
-        if (text != null)
-            text.text = local.readyToBegin ? "UNREADY" : "READY";
+        if (text != null) text.text = local.readyToBegin ? "UNREADY" : "READY";
     }
 
-    // ═══════════════════════════════════════════════════════════════
-    // HELPERS
-    // ═══════════════════════════════════════════════════════════════
+    // ─── Helpers ──────────────────────────────────────────────
 
     private void SavePlayerName()
     {
@@ -432,21 +381,18 @@ public class LobbyUIController : MonoBehaviour
             Destroy(parent.GetChild(i).gameObject);
     }
 
-    /// <summary> Find a TextMeshProUGUI in children by GameObject name. </summary>
     private TextMeshProUGUI FindChildTMP(GameObject parent, string childName)
     {
         var t = parent.transform.Find(childName);
         return t != null ? t.GetComponent<TextMeshProUGUI>() : null;
     }
 
-    /// <summary> Find a Button in children by GameObject name. </summary>
     private Button FindChildButton(GameObject parent, string childName)
     {
         var t = parent.transform.Find(childName);
         return t != null ? t.GetComponent<Button>() : null;
     }
 
-    /// <summary> Find an Image in children by GameObject name. </summary>
     private Image FindChildImage(GameObject parent, string childName)
     {
         var t = parent.transform.Find(childName);
