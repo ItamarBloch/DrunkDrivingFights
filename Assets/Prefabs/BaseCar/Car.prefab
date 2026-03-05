@@ -138,6 +138,8 @@ GameObject:
   - component: {fileID: 6617237956796161468}
   - component: {fileID: 5963882253581948365}
   - component: {fileID: 6146257441794110455}
+  - component: {fileID: 5622379544621609893}
+  - component: {fileID: 3995315270847602963}
   m_Layer: 0
   m_Name: Car
   m_TagString: Untagged
@@ -162,6 +164,7 @@ Transform:
   - {fileID: 1240404681462607690}
   - {fileID: 2607045538943358698}
   - {fileID: 5417984245419162600}
+  - {fileID: 6335929464145147670}
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!54 &1071203174212410614
@@ -257,6 +260,49 @@ MonoBehaviour:
   syncInterval: 0
   playerName: Player
   playerColor: {r: 1, g: 1, b: 1, a: 1}
+--- !u!114 &5622379544621609893
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2080996064300763512}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: eda48edb7895d2b498cf342390fb58a1, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::HealthController
+  syncDirection: 0
+  syncMode: 0
+  syncInterval: 0
+  maxHealth: 100
+  respawnDelay: 3
+  respawnInvulnerabilityTime: 2
+--- !u!114 &3995315270847602963
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2080996064300763512}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 13754e1944e854b468604624c8ae294b, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::WeaponController
+  syncDirection: 0
+  syncMode: 0
+  syncInterval: 0
+  weaponSettings: {fileID: 11400000, guid: 54571bd8d7acfc14789871a9eec369dc, type: 2}
+  rocketPrefab: {fileID: 4765077121572320767, guid: d0c4f9e3b6666b944ab2624b9bbd6002, type: 3}
+  muzzlePoint: {fileID: 6335929464145147670}
+  combatSettings: {fileID: 11400000, guid: 00b620958a9ef1242af5cde6b2697715, type: 2}
+  vfxReferences: {fileID: 11400000, guid: 08d5ab4b0bcd7f64f87f50bacbc14e31, type: 2}
+  aimFromCamera: 0
+  aimRaycastDistance: 500
+  aimLayers:
+    serializedVersion: 2
+    m_Bits: 4294967295
 --- !u!1 &2729786574552308341
 GameObject:
   m_ObjectHideFlags: 0
@@ -1025,3 +1071,34 @@ WheelCollider:
   m_LayerOverridePriority: 0
   m_Enabled: 1
   m_ProvidesContacts: 0
+--- !u!1 &8088959443006615620
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 6335929464145147670}
+  m_Layer: 0
+  m_Name: MuzzlePoint
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &6335929464145147670
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 8088959443006615620}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 1.1, z: 1.5}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 1299296820905524740}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
