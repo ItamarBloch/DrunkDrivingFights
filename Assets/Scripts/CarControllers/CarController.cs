@@ -4,6 +4,10 @@ using UnityEngine;
 /// <summary>
 /// Networked car controller using Mirror.
 /// 
+/// Subscribes to HealthController.OnDeath / OnRespawn events.
+/// When dead → returns zero input, car coasts to a stop.
+/// When alive → processes input normally.
+///
 /// Architecture:
 ///   • SERVER:  Authoritative — receives input from owning client, runs physics,
 ///              broadcasts state to all clients.
@@ -65,14 +69,13 @@ public class CarController : NetworkBehaviour
 
     // ── Network State ───────────────────────────────────────
 
-    /// <summary>Latest input from the owning client (lives on server).</summary>
     private CarInputData _serverInput;
-
-    /// <summary>Latest input polled locally (lives on owning client).</summary>
     private CarInputData _localInput;
-
-    /// <summary>Tick counter for throttling network sends.</summary>
     private int _tickCounter;
+
+    // ── Death State (set via HealthController events) ───────
+
+    private bool _isDead;
 
     // ── Public Accessors ────────────────────────────────────
 
@@ -81,7 +84,6 @@ public class CarController : NetworkBehaviour
     public CarSettings Settings => settings;
     public Rigidbody Body => _rb;
 
-    /// <summary>Current speed in km/h (available on all clients).</summary>
     [SyncVar] public float SyncedSpeedKmh;
 
     // ════════════════════════════════════════════════════════
@@ -93,11 +95,16 @@ public class CarController : NetworkBehaviour
         CacheAndCreateComponents();
         ConfigureRigidbody();
         InitializeSubsystems();
+        SubscribeToHealthEvents();
+    }
+
+    private void OnDestroy()
+    {
+        UnsubscribeFromHealthEvents();
     }
 
     public override void OnStartAuthority()
     {
-        // Only the owning player reads input.
         enabled = true;
     }
 
@@ -106,15 +113,11 @@ public class CarController : NetworkBehaviour
         enabled = true;
     }
 
-    /// <summary>
-    /// Polled every frame on the owning client to capture input
-    /// at screen refresh rate (smoother than FixedUpdate polling).
-    /// </summary>
     private void Update()
     {
         if (!isOwned) return;
         _inputHandler.Poll();
-        _localInput = _inputHandler.CurrentInput;
+        _localInput = _isDead ? new CarInputData() : _inputHandler.CurrentInput;
     }
 
     /// <summary>
@@ -134,32 +137,63 @@ public class CarController : NetworkBehaviour
 
         if (amHost)
         {
-            // Host: we ARE the server and the owner. Use local input directly —
-            // no need to send a Command to ourselves.
             HostTick();
         }
         else if (amServer)
         {
-            // Dedicated server: use input received from the owning client.
             ServerTick();
         }
         else if (amOwner)
         {
-            // Remote owner: predict locally for responsiveness,
-            // send input to server for authoritative sim.
             OwnerPredictionTick();
         }
-        // Remote clients: do nothing here. CarRemoteInterpolator handles visuals.
+    }
+
+    // ════════════════════════════════════════════════════════
+    //  HEALTH EVENT SUBSCRIPTION
+    // ════════════════════════════════════════════════════════
+
+    private void SubscribeToHealthEvents()
+    {
+        var health = GetComponent<HealthController>();
+        if (health != null)
+        {
+            health.OnDeath += HandleDeath;
+            health.OnRespawn += HandleRespawn;
+        }
+    }
+
+    private void UnsubscribeFromHealthEvents()
+    {
+        var health = GetComponent<HealthController>();
+        if (health != null)
+        {
+            health.OnDeath -= HandleDeath;
+            health.OnRespawn -= HandleRespawn;
+        }
+    }
+
+    private void HandleDeath(uint killerNetId)
+    {
+        _isDead = true;
+
+        // Server: stop the car immediately
+        if (isServer && _rb != null)
+        {
+            _rb.linearVelocity = Vector3.zero;
+            _rb.angularVelocity = Vector3.zero;
+        }
+    }
+
+    private void HandleRespawn()
+    {
+        _isDead = false;
     }
 
     // ════════════════════════════════════════════════════════
     //  HOST — Server + Owner on the same machine
     // ════════════════════════════════════════════════════════
 
-    /// <summary>
-    /// Host is both server and owner. Uses local input directly
-    /// for the authoritative simulation — no Command round-trip needed.
-    /// </summary>
     private void HostTick()
     {
         _motor.Tick(_localInput);
@@ -179,10 +213,6 @@ public class CarController : NetworkBehaviour
     //  SERVER — Dedicated server (not the owner)
     // ════════════════════════════════════════════════════════
 
-    /// <summary>
-    /// Dedicated server: runs the authoritative physics simulation
-    /// using input received from the owning client via CmdSendInput.
-    /// </summary>
     private void ServerTick()
     {
         _motor.Tick(_serverInput);
@@ -198,18 +228,12 @@ public class CarController : NetworkBehaviour
         }
     }
 
-    /// <summary>
-    /// Builds a state snapshot and sends it to all clients.
-    /// </summary>
     private void BroadcastState()
     {
         CarNetworkState state = CaptureCurrentState();
         RpcReceiveState(state);
     }
 
-    /// <summary>
-    /// Captures the current rigidbody + steering state into a snapshot.
-    /// </summary>
     private CarNetworkState CaptureCurrentState()
     {
         return new CarNetworkState
@@ -228,31 +252,20 @@ public class CarController : NetworkBehaviour
     //  OWNER CLIENT — Prediction & Reconciliation
     // ════════════════════════════════════════════════════════
 
-    /// <summary>
-    /// The owning client runs physics locally for instant responsiveness.
-    /// Also sends input to the server every tick.
-    /// </summary>
     private void OwnerPredictionTick()
     {
-        // Send our input to the server.
         CmdSendInput(_localInput);
 
-        // Run the same simulation locally (prediction).
         _motor.Tick(_localInput);
         _steering.Tick(_localInput.Steer, _motor.SpeedRatio);
     }
 
-    /// <summary>
-    /// When the owner receives server state, check if our prediction diverged.
-    /// If so, smoothly correct (or snap if way off).
-    /// </summary>
     private void OwnerReconcile(CarNetworkState serverState)
     {
         float posError = Vector3.Distance(_rb.position, serverState.Position);
 
         if (posError > correctionSnapThreshold)
         {
-            // Too far off — hard snap.
             _rb.position = serverState.Position;
             _rb.rotation = serverState.Rotation;
             _rb.linearVelocity = serverState.Velocity;
@@ -260,7 +273,6 @@ public class CarController : NetworkBehaviour
         }
         else if (posError > 0.05f)
         {
-            // Gently nudge toward server truth.
             _rb.position = Vector3.Lerp(
                 _rb.position,
                 serverState.Position,
@@ -272,31 +284,22 @@ public class CarController : NetworkBehaviour
                 Time.fixedDeltaTime * correctionLerpSpeed
             );
         }
-        // If within 0.05m — prediction is close enough, do nothing.
     }
 
     // ════════════════════════════════════════════════════════
     //  NETWORK MESSAGES
     // ════════════════════════════════════════════════════════
 
-    /// <summary>
-    /// [Client → Server] Sends the owner's input to the server for
-    /// authoritative simulation.
-    /// </summary>
     [Command(channel = Channels.Unreliable)]
     private void CmdSendInput(CarInputData input)
     {
         _serverInput = input;
     }
 
-    /// <summary>
-    /// [Server → All Clients] Broadcasts the authoritative car state.
-    /// Owner uses it for reconciliation, remotes use it for interpolation.
-    /// </summary>
     [ClientRpc(channel = Channels.Unreliable)]
     private void RpcReceiveState(CarNetworkState state)
     {
-        if (isServer) return; // Server already has the truth.
+        if (isServer) return;
 
         if (isOwned)
         {
