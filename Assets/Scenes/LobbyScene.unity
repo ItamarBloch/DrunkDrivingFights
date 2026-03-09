@@ -2601,7 +2601,7 @@ GameObject:
   - component: {fileID: 519545941}
   - component: {fileID: 519545940}
   m_Layer: 0
-  m_Name: GameManager
+  m_Name: GameNetworkRoomManager
   m_TagString: Untagged
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
@@ -2636,7 +2636,8 @@ MonoBehaviour:
   playerPrefab: {fileID: 2080996064300763512, guid: 9bbfe7ec75b9e4e41a252754895decf6, type: 3}
   autoCreatePlayer: 1
   playerSpawnMethod: 0
-  spawnPrefabs: []
+  spawnPrefabs:
+  - {fileID: 4765077121572320767, guid: d0c4f9e3b6666b944ab2624b9bbd6002, type: 3}
   exceptionsDisconnect: 1
   snapshotSettings:
     bufferTimeMultiplier: 2

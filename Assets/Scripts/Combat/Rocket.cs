@@ -2,20 +2,17 @@ using UnityEngine;
 using Mirror;
 
 /// <summary>
-/// Networked rocket projectile. Spawned by WeaponController on the server.
+/// Networked rocket. Inherits car velocity on spawn, has cruise speed transition.
 ///
-/// Speed model (solves the "car outruns its own rocket" problem):
-///   1. On spawn, rocket inherits the car's Rigidbody velocity
-///   2. Adds rocketSpeed on top in the aim direction
-///   3. Total is capped at rocketMaxSpeed
-///   4. Over time, rocket lerps toward rocketCruiseSpeed
-///   This means a rocket fired from a 200kph car launches FAST (200kph + rocket speed)
-///   then gradually settles to cruise speed. Feels punchy, never hits the shooter.
+/// IMPORTANT — Rocket prefab needs these components:
+///   - Rigidbody
+///   - NetworkIdentity
+///   - NetworkTransform (syncs position/rotation from server to clients)
+///   - SphereCollider
+///   - Rocket (this script)
 ///
-/// Prefab structure:
-///   Rocket              ← Rigidbody + NetworkIdentity + Rocket + SphereCollider
-///     └── Visual        ← Mesh (capsule placeholder) or your rocket model
-///     └── TrailAnchor   ← Empty — trail VFX parents here
+/// The server drives the Rigidbody. Clients receive position via NetworkTransform.
+/// On clients the Rigidbody is set to kinematic so it doesn't fight the sync.
 /// </summary>
 [RequireComponent(typeof(Rigidbody))]
 [RequireComponent(typeof(NetworkIdentity))]
@@ -26,21 +23,14 @@ public class Rocket : NetworkBehaviour
     [SerializeField] private VFXReferences vfxReferences;
     [SerializeField] private Transform trailAnchor;
 
-    // ── Synced State ────────────────────────────────────────
-
     [SyncVar] private uint _ownerNetId;
-
-    // ── Local State ─────────────────────────────────────────
 
     private WeaponSettings _weapon;
     private Rigidbody _rb;
     private bool _hasExploded;
     private float _lifetimeTimer;
     private float _currentSpeed;
-    private Vector3 _flyDirection;
     private GameObject _trailInstance;
-
-    // ── Setup ───────────────────────────────────────────────
 
     private void Awake()
     {
@@ -50,133 +40,101 @@ public class Rocket : NetworkBehaviour
         _rb.interpolation = RigidbodyInterpolation.Interpolate;
     }
 
-    /// <summary>
-    /// Called by WeaponController on the SERVER right after spawn.
-    /// </summary>
+    public override void OnStartClient()
+    {
+        // On clients (not the server), make rigidbody kinematic
+        // so it doesn't fight with NetworkTransform syncing the position.
+        if (!isServer)
+        {
+            _rb.isKinematic = true;
+        }
+    }
+
     [Server]
-    public void Initialize(
-        WeaponSettings weapon,
-        Vector3 aimDirection,
-        Vector3 shooterVelocity,
-        uint ownerNetId)
+    public void Initialize(WeaponSettings weapon, Vector3 aimDirection,
+        Vector3 shooterVelocity, uint ownerNetId)
     {
         _weapon = weapon;
         _ownerNetId = ownerNetId;
         _lifetimeTimer = weapon.rocketLifetime;
 
-        // ── Velocity inheritance ──
-        // Start with the shooter's velocity so the rocket is never slower than the car
         Vector3 launchVelocity;
-
         if (weapon.inheritShooterVelocity)
         {
-            // Project shooter velocity onto aim direction (forward component)
-            // plus add the rocket's own speed on top
-            float forwardComponent = Mathf.Max(0f, Vector3.Dot(shooterVelocity, aimDirection.normalized));
-            launchVelocity = aimDirection.normalized * (forwardComponent + weapon.rocketSpeed);
+            float fwd = Mathf.Max(0f, Vector3.Dot(shooterVelocity, aimDirection.normalized));
+            launchVelocity = aimDirection.normalized * (fwd + weapon.rocketSpeed);
         }
         else
         {
             launchVelocity = aimDirection.normalized * weapon.rocketSpeed;
         }
 
-        // Cap at max speed
         if (launchVelocity.magnitude > weapon.rocketMaxSpeed)
             launchVelocity = launchVelocity.normalized * weapon.rocketMaxSpeed;
 
         _rb.linearVelocity = launchVelocity;
         _currentSpeed = launchVelocity.magnitude;
-        _flyDirection = aimDirection.normalized;
 
-        // Orient rocket to face travel direction
         if (aimDirection != Vector3.zero)
             transform.rotation = Quaternion.LookRotation(aimDirection);
 
-        // Tell clients to set up visuals
         RpcSetupVisuals(weapon.rocketTrailVFXKey);
     }
-
-    // ── Physics (Server) ────────────────────────────────────
 
     private void FixedUpdate()
     {
         if (!isServer || _hasExploded || _weapon == null) return;
 
-        // ── Gravity ──
         if (_weapon.rocketGravityScale > 0f)
             _rb.AddForce(Physics.gravity * _weapon.rocketGravityScale, ForceMode.Acceleration);
 
-        // ── Cruise speed transition ──
-        // Gradually bring speed toward cruise speed so rocket normalizes over time
         if (_weapon.rocketCruiseSpeed > 0f && _weapon.cruiseTransitionRate > 0f)
         {
-            _currentSpeed = Mathf.MoveTowards(
-                _currentSpeed,
-                _weapon.rocketCruiseSpeed,
-                _weapon.cruiseTransitionRate * Time.fixedDeltaTime
-            );
-
-            // Maintain direction but adjust magnitude
+            _currentSpeed = Mathf.MoveTowards(_currentSpeed, _weapon.rocketCruiseSpeed,
+                _weapon.cruiseTransitionRate * Time.fixedDeltaTime);
             Vector3 dir = _rb.linearVelocity.normalized;
             if (dir.sqrMagnitude > 0.01f)
-            {
-                // Preserve the actual direction (including gravity arc) but set speed
                 _rb.linearVelocity = dir * _currentSpeed;
-            }
         }
 
-        // ── Orient to velocity ──
         if (_rb.linearVelocity.sqrMagnitude > 0.1f)
             transform.rotation = Quaternion.LookRotation(_rb.linearVelocity.normalized);
 
-        // ── Lifetime ──
         _lifetimeTimer -= Time.fixedDeltaTime;
-        if (_lifetimeTimer <= 0f)
-            Explode();
+        if (_lifetimeTimer <= 0f) Explode();
     }
 
-    // ── Collision ───────────────────────────────────────────
-
-    [Server]
+    // Unity calls OnCollisionEnter on ALL clients — [Server] attribute
+    // does NOT prevent it, it just logs a warning. Use a manual check.
     private void OnCollisionEnter(Collision collision)
     {
+        if (!isServer) return;
         if (_hasExploded) return;
 
-        // Don't collide with the shooter
         var netId = collision.gameObject.GetComponentInParent<NetworkIdentity>();
         if (netId != null && netId.netId == _ownerNetId) return;
 
         Explode();
     }
 
-    // ── Explosion ───────────────────────────────────────────
-
-    [Server]
     private void Explode()
     {
+        if (!isServer) return;
         if (_hasExploded) return;
         _hasExploded = true;
 
-        Vector3 pos = transform.position;
-
         if (_weapon != null && combatSettings != null)
-        {
-            ExplosionHelper.ProcessExplosion(pos, _weapon, combatSettings, _ownerNetId);
-        }
+            ExplosionHelper.ProcessExplosion(transform.position, _weapon, combatSettings, _ownerNetId);
 
         string vfxKey = _weapon != null ? _weapon.explosionVFXKey : "";
-        RpcSpawnExplosionVFX(pos, vfxKey);
-
+        RpcSpawnExplosionVFX(transform.position, vfxKey);
         NetworkServer.Destroy(gameObject);
     }
-
-    // ── Client Visuals ──────────────────────────────────────
 
     [ClientRpc]
     private void RpcSetupVisuals(string trailKey)
     {
         if (vfxReferences == null || string.IsNullOrEmpty(trailKey)) return;
-
         Transform anchor = trailAnchor != null ? trailAnchor : transform;
         var entry = vfxReferences.GetEffect(trailKey);
         if (entry != null)

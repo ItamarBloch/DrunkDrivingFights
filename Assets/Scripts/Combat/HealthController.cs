@@ -3,28 +3,17 @@ using Mirror;
 using System;
 
 /// <summary>
-/// Networked health system. Attach to the Car prefab root.
-///
-/// Server-authoritative: only the server modifies health.
-/// Health syncs to all clients via SyncVar.
-///
-/// Events fire on ALL clients so UI / effects can react:
-///   OnHealthChanged  → CombatHUD listens to this
-///   OnDeath          → death screen, kill feed, etc.
-///   OnRespawn        → reset UI, re-enable controls, etc.
+/// Networked health system. THE EVENT DISPATCHER.
+/// All other scripts subscribe to OnDeath / OnRespawn.
+/// Does NOT auto-respawn — a future GameModeController calls ForceRespawn().
 /// </summary>
 [RequireComponent(typeof(NetworkIdentity))]
 public class HealthController : NetworkBehaviour, IDamageable
 {
-    // ── Settings ────────────────────────────────────────────
-
     [Header("Health")]
     [SerializeField] private float maxHealth = 100f;
 
-    [Header("Respawn")]
-    [SerializeField] private float respawnDelay = 3f;
-
-    [Tooltip("Brief invincibility after respawning (prevents spawn-kill).")]
+    [Header("Respawn Protection")]
     [SerializeField] private float respawnInvulnerabilityTime = 2f;
 
     // ── Networked State ─────────────────────────────────────
@@ -38,23 +27,17 @@ public class HealthController : NetworkBehaviour, IDamageable
     [SyncVar]
     private uint _lastDamagedByNetId;
 
-    // ── Local State ─────────────────────────────────────────
-
     private float _invulnTimer;
-    private float _respawnTimer;
-    private bool _waitingToRespawn;
 
-    // ── Events ──────────────────────────────────────────────
+    // ── EVENTS — other scripts subscribe to these ───────────
 
-    /// <summary>
-    /// (currentHealth, maxHealth, damageAmount, damageSourcePosition)
-    /// damageAmount > 0 means damage, &lt; 0 means heal.
-    /// </summary>
+    /// <summary>(currentHealth, maxHealth, damageAmount, damageSourcePosition)</summary>
     public event Action<float, float, float, Vector3> OnHealthChanged;
 
-    /// <summary>(killerNetId)</summary>
+    /// <summary>(killerNetId) — player just died.</summary>
     public event Action<uint> OnDeath;
 
+    /// <summary>Player was respawned by a game mode.</summary>
     public event Action OnRespawn;
 
     // ── IDamageable ─────────────────────────────────────────
@@ -64,6 +47,7 @@ public class HealthController : NetworkBehaviour, IDamageable
     public float CurrentHealth => _currentHealth;
     public float MaxHealth => maxHealth;
     public bool IsInvulnerable => _invulnTimer > 0f;
+    public uint LastDamagedByNetId => _lastDamagedByNetId;
 
     // ── Lifecycle ───────────────────────────────────────────
 
@@ -81,16 +65,8 @@ public class HealthController : NetworkBehaviour, IDamageable
     private void Update()
     {
         if (!isServer) return;
-
         if (_invulnTimer > 0f)
             _invulnTimer -= Time.deltaTime;
-
-        if (_waitingToRespawn)
-        {
-            _respawnTimer -= Time.deltaTime;
-            if (_respawnTimer <= 0f)
-                PerformRespawn();
-        }
     }
 
     // ── Damage (Server Only) ────────────────────────────────
@@ -102,7 +78,6 @@ public class HealthController : NetworkBehaviour, IDamageable
 
         _lastDamagedByNetId = instigatorNetId;
         _currentHealth = Mathf.Max(0f, _currentHealth - damage);
-
         RpcDamageReceived(damage, damageSource);
 
         if (_currentHealth <= 0f)
@@ -117,46 +92,33 @@ public class HealthController : NetworkBehaviour, IDamageable
         RpcDamageReceived(-amount, Vector3.zero);
     }
 
-    // ── Death & Respawn ─────────────────────────────────────
+    // ── Death (stays dead until ForceRespawn) ───────────────
 
     [Server]
     private void Die()
     {
         _isAlive = false;
         RpcOnDeath(_lastDamagedByNetId);
-
-        if (respawnDelay > 0f)
-        {
-            _waitingToRespawn = true;
-            _respawnTimer = respawnDelay;
-        }
     }
 
+    /// <summary>
+    /// Called by a future GameModeController. NOT automatic.
+    /// Teleport the player BEFORE calling this.
+    /// </summary>
     [Server]
-    private void PerformRespawn()
+    public void ForceRespawn()
     {
-        _waitingToRespawn = false;
         _currentHealth = maxHealth;
         _isAlive = true;
         _invulnTimer = respawnInvulnerabilityTime;
-
-        // TODO: teleport to spawn point when spawn system exists
-        // transform.position = SpawnManager.GetSpawnPoint();
-
         RpcOnRespawn();
     }
 
-    [Server]
-    public void ForceRespawn() => PerformRespawn();
-
     // ── SyncVar Hook ────────────────────────────────────────
 
-    private void OnHealthSyncHook(float oldVal, float newVal)
-    {
-        // Actual event firing is via RPC (carries more data)
-    }
+    private void OnHealthSyncHook(float oldVal, float newVal) { }
 
-    // ── RPCs ────────────────────────────────────────────────
+    // ── RPCs — these fire the events on ALL clients ─────────
 
     [ClientRpc]
     private void RpcDamageReceived(float damageAmount, Vector3 source)

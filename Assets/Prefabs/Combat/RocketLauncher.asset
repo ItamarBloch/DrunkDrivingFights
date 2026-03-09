@@ -15,7 +15,7 @@ MonoBehaviour:
   maxAmmo: 3
   reloadTime: 2.5
   fireCooldown: 0.4
-  reloadPerRocket: 0
+  reloadPerRocket: 1
   rocketSpeed: 80
   inheritShooterVelocity: 1
   rocketMaxSpeed: 200
