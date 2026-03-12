@@ -73,9 +73,14 @@ public class CarController : NetworkBehaviour
     private CarInputData _localInput;
     private int _tickCounter;
 
-    // ── Death State (set via HealthController events) ───────
+    // ── Death / Freeze State ────────────────────────────────
 
     private bool _isDead;
+
+    [SyncVar] private bool _isFrozen;
+
+    /// <summary>Server: freeze or unfreeze this car's input processing.</summary>
+    [Server] public void SetFrozen(bool frozen) => _isFrozen = frozen;
 
     // ── Public Accessors ────────────────────────────────────
 
@@ -117,7 +122,7 @@ public class CarController : NetworkBehaviour
     {
         if (!isOwned) return;
         _inputHandler.Poll();
-        _localInput = _isDead ? new CarInputData() : _inputHandler.CurrentInput;
+        _localInput = (_isDead || _isFrozen) ? new CarInputData() : _inputHandler.CurrentInput;
     }
 
     /// <summary>

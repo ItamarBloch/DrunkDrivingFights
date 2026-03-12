@@ -40,6 +40,11 @@ public class WeaponController : NetworkBehaviour
     private Rigidbody _carRigidbody;
     private bool _isDead;
 
+    [SyncVar] private bool _isFrozen;
+
+    /// <summary>Server: freeze or unfreeze this weapon's input processing.</summary>
+    [Server] public void SetFrozen(bool frozen) => _isFrozen = frozen;
+
     private InputAction _fireAction;
     private InputAction _reloadAction;
 
@@ -165,7 +170,7 @@ public class WeaponController : NetworkBehaviour
 
     private void LocalPlayerUpdate()
     {
-        if (weaponSettings == null || _isDead) return;
+        if (weaponSettings == null || _isDead || _isFrozen) return;
 
         if (_fireAction.WasPerformedThisFrame())
         {

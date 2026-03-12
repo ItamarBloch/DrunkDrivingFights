@@ -189,6 +189,30 @@ public class GameNetworkRoomManager : NetworkRoomManager
         }
     }
 
+    /// <summary>
+    /// Returns all players to the lobby while keeping the room alive.
+    ///
+    /// Host:   ServerChangeScene(RoomScene) — all connected clients follow automatically.
+    ///         The room is preserved; a new match can be started immediately.
+    ///
+    /// Client: StopClient() + load lobby — they disconnect and land in the lobby UI.
+    ///         If the host changes scene first, the client is taken there automatically
+    ///         (and this code never runs for them).
+    /// </summary>
+    public void ReturnToLobby()
+    {
+        if (IsOwner)
+        {
+            discovery.StopAdvertising();
+            ServerChangeScene(RoomScene);
+        }
+        else
+        {
+            StopClient();
+            UnityEngine.SceneManagement.SceneManager.LoadScene("LobbyScene");
+        }
+    }
+
     public void StartGame()
     {
         if (!IsOwner) return;
@@ -221,6 +245,11 @@ public class GameNetworkRoomManager : NetworkRoomManager
     {
         base.OnRoomServerDisconnect(conn);
         Debug.Log($"[Lobby] Player disconnected: {conn.connectionId}");
+
+        // Notify MatchManager so a mid-match disconnect counts as a death.
+        if (MatchManager.singleton != null && conn.identity != null)
+            MatchManager.singleton.HandlePlayerDisconnected(conn.identity.netId);
+
         Invoke(nameof(FirePlayersUpdated), 0.1f);
     }
 

@@ -67,6 +67,13 @@ public class LobbyUIController : MonoBehaviour
         WireButtons();
         SubscribeEvents();
         ShowScreen(Screen.MainMenu);
+
+        // Auto quick-match if the player clicked "Quick Match" on the end-game screen.
+        if (PlayerPrefs.GetInt("PendingQuickMatch", 0) == 1)
+        {
+            PlayerPrefs.DeleteKey("PendingQuickMatch");
+            OnQuickMatch();
+        }
     }
 
     private void OnDestroy() { UnsubscribeEvents(); }
