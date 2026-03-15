@@ -14,7 +14,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::CarSettings
   maxForwardSpeed: 120
   maxReverseSpeed: 40
-  motorTorque: 1500
+  motorTorque: 4000
   torqueCurve:
     serializedVersion: 2
     m_Curve:
@@ -45,4 +45,7 @@ MonoBehaviour:
   minSteerAngleAtMaxSpeed: 10
   steerSpeed: 150
   steerReturnSpeed: 250
+  counterThrustForce: 60
+  launchBoostForce: 15
+  launchBoostMaxSpeed: 40
   downforceCoefficient: 2.5
