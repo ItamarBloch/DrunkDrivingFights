@@ -443,7 +443,7 @@ MonoBehaviour:
   syncDirection: 0
   syncMode: 0
   syncInterval: 0
-  settings: {fileID: 11400000, guid: fe182be20bd6c324d84fd221f64a316e, type: 2}
+  settings: {fileID: 11400000, guid: b53dc3dce5ace3e4bb28a40bd3b84b63, type: 2}
   frontWheels:
   - {fileID: 7087129086091276938}
   - {fileID: 1527793139382442769}

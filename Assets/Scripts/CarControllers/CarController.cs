@@ -202,7 +202,8 @@ public class CarController : NetworkBehaviour
     private void HostTick()
     {
         _motor.Tick(_localInput);
-        _steering.Tick(_localInput.Steer, _motor.SpeedRatio);
+        float steer = _motor.IsDrifting ? _localInput.Steer * settings.driftSteerMultiplier : _localInput.Steer;
+        _steering.Tick(steer, _motor.SpeedRatio);
 
         SyncedSpeedKmh = _motor.SpeedKmh;
 
@@ -221,7 +222,8 @@ public class CarController : NetworkBehaviour
     private void ServerTick()
     {
         _motor.Tick(_serverInput);
-        _steering.Tick(_serverInput.Steer, _motor.SpeedRatio);
+        float steer = _motor.IsDrifting ? _serverInput.Steer * settings.driftSteerMultiplier : _serverInput.Steer;
+        _steering.Tick(steer, _motor.SpeedRatio);
 
         SyncedSpeedKmh = _motor.SpeedKmh;
 
@@ -262,7 +264,8 @@ public class CarController : NetworkBehaviour
         CmdSendInput(_localInput);
 
         _motor.Tick(_localInput);
-        _steering.Tick(_localInput.Steer, _motor.SpeedRatio);
+        float steer = _motor.IsDrifting ? _localInput.Steer * settings.driftSteerMultiplier : _localInput.Steer;
+        _steering.Tick(steer, _motor.SpeedRatio);
     }
 
     private void OwnerReconcile(CarNetworkState serverState)
@@ -340,7 +343,7 @@ public class CarController : NetworkBehaviour
     {
         WheelCollider[] allWheels = BuildAllWheelsArray();
 
-        _motor.Initialize(settings, _rb, rearWheels, allWheels);
+        _motor.Initialize(settings, _rb, frontWheels, rearWheels, allWheels);
         _steering.Initialize(settings, frontWheels);
         _wheelVisuals.Initialize(allWheels, wheelVisuals);
         _interpolator.Initialize(_rb);
