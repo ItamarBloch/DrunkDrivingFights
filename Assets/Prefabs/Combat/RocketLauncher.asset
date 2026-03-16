@@ -12,7 +12,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 1239131784990b341948820d2378dc35, type: 3}
   m_Name: RocketLauncher
   m_EditorClassIdentifier: Assembly-CSharp::WeaponSettings
-  maxAmmo: 3
+  maxAmmo: 1
   reloadTime: 2.5
   fireCooldown: 0.4
   reloadPerRocket: 1
@@ -22,7 +22,7 @@ MonoBehaviour:
   rocketCruiseSpeed: 80
   cruiseTransitionRate: 30
   rocketLifetime: 5
-  rocketGravityScale: 0.3
+  rocketGravityScale: 0.1
   explosionRadius: 8
   maxDamage: 100
   minDamage: 15
