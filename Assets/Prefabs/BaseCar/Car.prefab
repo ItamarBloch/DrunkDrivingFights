@@ -356,6 +356,7 @@ GameObject:
   - component: {fileID: 3995315270847602963}
   - component: {fileID: -4115152175950394946}
   - component: {fileID: 786781733381093227}
+  - component: {fileID: 495324720787028856}
   m_Layer: 0
   m_Name: Car
   m_TagString: Untagged
@@ -562,6 +563,33 @@ MonoBehaviour:
   syncInterval: 0
   deathPanel: {fileID: 1236717966212058932}
   killedByText: {fileID: 2139804239478886231}
+--- !u!114 &495324720787028856
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2080996064300763512}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: a83ce412088f9c04baa4e81de1f14acd, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::SpeedometerHUD
+  syncDirection: 0
+  syncMode: 0
+  syncInterval: 0
+  dialSprite: {fileID: 21300000, guid: 1b97dea0c2d41d843836c94bf29bda6e, type: 3}
+  needleSprite: {fileID: 21300000, guid: 3b434f0d366df2645b8ac46018893891, type: 3}
+  size: {x: 220, y: 220}
+  anchoredPosition: {x: -120, y: 120}
+  minAngle: -135
+  maxAngle: -405
+  maxDisplaySpeed: 180
+  needlePivot: {x: 0.5, y: 0.5}
+  smoothSpeed: 10
+  showReadout: 1
+  readoutOffset: {x: 0, y: 20}
+  readoutFontSize: 20
 --- !u!1 &2729786574552308341
 GameObject:
   m_ObjectHideFlags: 0
@@ -710,7 +738,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: UnityEngine.UI::UnityEngine.UI.Image
   m_Material: {fileID: 0}
-  m_Color: {r: 0.43867922, g: 1, b: 0.4724976, a: 1}
+  m_Color: {r: 1, g: 0.2806342, b: 0.2028302, a: 1}
   m_RaycastTarget: 1
   m_RaycastPadding: {x: 0, y: 0, z: 0, w: 0}
   m_Maskable: 1
@@ -1015,7 +1043,7 @@ RectTransform:
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
   m_AnchorMin: {x: 1, y: 0}
   m_AnchorMax: {x: 1, y: 0}
-  m_AnchoredPosition: {x: -392, y: 25}
+  m_AnchoredPosition: {x: -350, y: 40}
   m_SizeDelta: {x: 200, y: 50}
   m_Pivot: {x: 0.5, y: 0.5}
 --- !u!222 &5140938861175793942
@@ -1073,8 +1101,8 @@ MonoBehaviour:
   m_faceColor:
     serializedVersion: 2
     rgba: 4294967295
-  m_fontSize: 28
-  m_fontSizeBase: 28
+  m_fontSize: 36
+  m_fontSizeBase: 36
   m_fontWeight: 400
   m_enableAutoSizing: 0
   m_fontSizeMin: 18
@@ -1525,7 +1553,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: UnityEngine.UI::UnityEngine.UI.Image
   m_Material: {fileID: 0}
-  m_Color: {r: 0.4481132, g: 0.6108004, b: 1, a: 1}
+  m_Color: {r: 0.3443396, g: 0.70304537, b: 1, a: 1}
   m_RaycastTarget: 1
   m_RaycastPadding: {x: 0, y: 0, z: 0, w: 0}
   m_Maskable: 1
@@ -2052,7 +2080,7 @@ RectTransform:
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
   m_AnchorMin: {x: 1, y: 0}
   m_AnchorMax: {x: 1, y: 0}
-  m_AnchoredPosition: {x: -149.99988, y: 80.00002}
+  m_AnchoredPosition: {x: -350, y: 75}
   m_SizeDelta: {x: 300, y: 50}
   m_Pivot: {x: 0.5, y: 0.5}
 --- !u!222 &5412708952873761042
@@ -2231,7 +2259,7 @@ RectTransform:
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
   m_AnchorMin: {x: 0, y: 0}
   m_AnchorMax: {x: 0, y: 0}
-  m_AnchoredPosition: {x: 150.00005, y: 25}
+  m_AnchoredPosition: {x: 185, y: 25}
   m_SizeDelta: {x: 300, y: 50}
   m_Pivot: {x: 0.5, y: 0.5}
 --- !u!222 &6542039728321393473
