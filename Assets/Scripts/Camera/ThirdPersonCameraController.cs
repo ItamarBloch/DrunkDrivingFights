@@ -79,6 +79,10 @@ public class ThirdPersonCameraController : NetworkBehaviour
     [SerializeField] private float referenceSpeed = 40f;
     [SerializeField] private float fovSmoothSpeed = 5f;
 
+    [Header("Mouse Input")]
+    [Tooltip("Mouse sensitivity for orbiting. Increase if the camera feels sluggish.")]
+    [SerializeField] private float mouseSensitivity = 0.15f;
+
     [Header("Cursor")]
     [SerializeField] private bool lockCursor = true;
 
@@ -95,6 +99,11 @@ public class ThirdPersonCameraController : NetworkBehaviour
     private Rigidbody carRigidbody;
     private float currentFOV;
     private bool cameraCreated;
+
+    // Manually tracked orbit values (so we can layer the look-back offset on top)
+    private float _hValue    = 0f;
+    private float _vValue    = 15f;   // matches VerticalAxis initial value in CreateCameraRig
+    private bool  _lookBack  = false;
 
     // ──────────────────────────────────────────────
     //  PUBLIC API
@@ -176,10 +185,9 @@ public class ThirdPersonCameraController : NetworkBehaviour
         orbitalFollow.VerticalAxis.Recentering.Time = recenterTime;
 
         // ── 4. Input Axis Controller ──
-        // This is the Cinemachine 3 way: it auto-detects axes on the
-        // OrbitalFollow and connects them to mouse/gamepad input.
-        // Works with both New Input System and Legacy.
-        vcamGO.AddComponent<CinemachineInputAxisController>();
+        // We intentionally do NOT add CinemachineInputAxisController here.
+        // That component has multi-instance input issues (Ctrl+B / two clients).
+        // We drive the axes manually in LateUpdate using Mouse.current.delta instead.
 
         // ── 5. Rotation Composer (Aim) ──
         var rotationComposer = vcamGO.AddComponent<CinemachineRotationComposer>();
@@ -256,6 +264,27 @@ public class ThirdPersonCameraController : NetworkBehaviour
             bool isLocked = Cursor.lockState == CursorLockMode.Locked;
             Cursor.lockState = isLocked ? CursorLockMode.None : CursorLockMode.Locked;
             Cursor.visible = isLocked;
+        }
+
+        // Mouse orbit — driven manually so it works in every multiplayer instance
+        if (orbitalFollow != null && Cursor.lockState == CursorLockMode.Locked)
+        {
+            var mouse = UnityEngine.InputSystem.Mouse.current;
+            if (mouse != null)
+            {
+                // Look-back (middle mouse button) — GTA:SA style
+                _lookBack = mouse.middleButton.isPressed;
+
+                // Normal orbit input (always accumulate into the base values)
+                Vector2 delta = mouse.delta.ReadValue();
+                _hValue += delta.x * mouseSensitivity;
+                _vValue -= delta.y * mouseSensitivity;
+                _vValue  = Mathf.Clamp(_vValue, minVerticalAngle, maxVerticalAngle);
+
+                // Apply to Cinemachine: add 180° offset when looking back
+                orbitalFollow.HorizontalAxis.Value = _hValue + (_lookBack ? 180f : 0f);
+                orbitalFollow.VerticalAxis.Value   = _vValue;
+            }
         }
 
         // Speed FOV
