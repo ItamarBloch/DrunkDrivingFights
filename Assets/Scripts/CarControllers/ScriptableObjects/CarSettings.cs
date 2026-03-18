@@ -58,6 +58,14 @@ public class CarSettings : ScriptableObject
     [Tooltip("Speed (km/h) below which the launch boost is active.")]
     public float launchBoostMaxSpeed = 40f;
 
+    [Header("Anti-Roll Bar")]
+    [Tooltip("Stiffness of the virtual anti-roll bar on each axle (N/m). " +
+             "Resists body roll from turning without affecting suspension on bumps — " +
+             "if both wheels on an axle hit a bump together the travel difference is 0 " +
+             "so no corrective force is applied and the springs work freely. " +
+             "Try 5000–15000. 0 = disabled.")]
+    public float antiRollStiffness = 8000f;
+
     [Header("Grip & Feel")]
     [Tooltip("How much lateral (sideways) velocity is kept each physics step when driving normally. " +
              "Acts like tire grip. 0.92 = 92% kept per step → ~1.5% remains after 1 second. " +

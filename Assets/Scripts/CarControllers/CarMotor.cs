@@ -101,6 +101,7 @@ public class CarMotor : MonoBehaviour
         ApplyDownforce();
         ApplyLateralDamping(wantsDrift);
         ApplyYawDamping(input.Steer, wantsDrift);
+        ApplyAntiRollBars();
     }
 
     // ── Drift ────────────────────────────────────────────────
@@ -113,7 +114,7 @@ public class CarMotor : MonoBehaviour
 
         if (drifting)
         {
-            float currentValue = _driveWheels[0].forwardFriction.asymptoteValue;
+            float currentValue = _driveWheels[0].sidewaysFriction.asymptoteValue;
             float target       = _driftFactor * _settings.driftFriction;
             float smoothed     = Mathf.SmoothDamp(currentValue, target, ref _driftFrictionVelocity, smoothTime);
 
@@ -339,6 +340,46 @@ public class CarMotor : MonoBehaviour
                 _rb.angularVelocity += transform.up * (newYaw - yaw);
             }
         }
+    }
+
+    // ── Anti-Roll Bar ────────────────────────────────────────
+
+    /// <summary>
+    /// Simulates a physical anti-roll bar (stabilizer bar) on both axles.
+    /// Measures the difference in suspension travel between left and right wheels.
+    /// - Turning on flat ground: one side compresses more → big difference → corrective force.
+    /// - Both wheels hitting a bump together: travel is equal → difference = 0 → springs work freely.
+    /// - Single-wheel bump: some corrective force, but the spring still absorbs most of the impact.
+    /// </summary>
+    private void ApplyAntiRollBars()
+    {
+        if (_settings.antiRollStiffness <= 0f) return;
+        ApplyAntiRollBar(_frontWheels[0], _frontWheels[1]);
+        ApplyAntiRollBar(_driveWheels[0], _driveWheels[1]);
+    }
+
+    private void ApplyAntiRollBar(WheelCollider left, WheelCollider right)
+    {
+        float travelL = GetSuspensionTravel(left);
+        float travelR = GetSuspensionTravel(right);
+
+        float antiRollForce = (travelL - travelR) * _settings.antiRollStiffness;
+
+        if (left.isGrounded)
+            _rb.AddForceAtPosition(left.transform.up * -antiRollForce, left.transform.position);
+        if (right.isGrounded)
+            _rb.AddForceAtPosition(right.transform.up *  antiRollForce, right.transform.position);
+    }
+
+    /// <summary>
+    /// Returns normalised suspension travel: 0 = fully compressed, 1 = fully extended.
+    /// Returns 1 when the wheel is in the air (treat as fully extended).
+    /// </summary>
+    private static float GetSuspensionTravel(WheelCollider wheel)
+    {
+        if (!wheel.GetGroundHit(out WheelHit hit)) return 1f;
+        return (-wheel.transform.InverseTransformPoint(hit.point).y - wheel.radius)
+               / wheel.suspensionDistance;
     }
 
     // ── Downforce ───────────────────────────────────────────
