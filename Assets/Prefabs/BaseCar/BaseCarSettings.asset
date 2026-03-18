@@ -39,13 +39,18 @@ MonoBehaviour:
     m_PreInfinity: 2
     m_PostInfinity: 2
     m_RotationOrder: 4
+  directDriveForce: 40
   brakeTorque: 3000
   decelerationTorque: 500
   maxSteerAngle: 35
   minSteerAngleAtMaxSpeed: 10
-  steerSpeed: 150
+  steerSpeed: 180
   steerReturnSpeed: 250
+  steeringAngularBoost: 0
   counterThrustForce: 60
   launchBoostForce: 15
   launchBoostMaxSpeed: 40
   downforceCoefficient: 2.5
+  driftMinSpeed: 25
+  driftFriction: 0.5
+  driftSteerMultiplier: 1.5
