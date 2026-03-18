@@ -203,7 +203,7 @@ public class CarController : NetworkBehaviour
     {
         _motor.Tick(_localInput);
         float steer = _motor.IsDrifting ? _localInput.Steer * settings.driftSteerMultiplier : _localInput.Steer;
-        _steering.Tick(steer, _motor.SpeedRatio);
+        _steering.Tick(steer, _motor.SpeedKmh);
 
         SyncedSpeedKmh = _motor.SpeedKmh;
 
@@ -223,7 +223,7 @@ public class CarController : NetworkBehaviour
     {
         _motor.Tick(_serverInput);
         float steer = _motor.IsDrifting ? _serverInput.Steer * settings.driftSteerMultiplier : _serverInput.Steer;
-        _steering.Tick(steer, _motor.SpeedRatio);
+        _steering.Tick(steer, _motor.SpeedKmh);
 
         SyncedSpeedKmh = _motor.SpeedKmh;
 
@@ -265,7 +265,7 @@ public class CarController : NetworkBehaviour
 
         _motor.Tick(_localInput);
         float steer = _motor.IsDrifting ? _localInput.Steer * settings.driftSteerMultiplier : _localInput.Steer;
-        _steering.Tick(steer, _motor.SpeedRatio);
+        _steering.Tick(steer, _motor.SpeedKmh);
     }
 
     private void OwnerReconcile(CarNetworkState serverState)
