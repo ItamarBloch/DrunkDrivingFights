@@ -80,11 +80,19 @@ public class LobbyUIController : MonoBehaviour
     [Header("=== OPTIONS ===")]
     [SerializeField] private Button backButton_Options;
 
+    // ── Direct Connect (LAN direct / internet) ────────────────────────────────
+    [Header("=== DIRECT CONNECT ===")]
+    [SerializeField] private GameObject directConnectPanel;
+    [SerializeField] private TMP_InputField directIPInput;
+    [SerializeField] private Button directConnectButton;
+    [SerializeField] private Button directConnectToggleButton;
+
     // ── State ─────────────────────────────────────────────────────────────────
     private enum Screen { MainMenu, QuickMatchSearch, MatchBrowser, CreateMatch, MatchLobby, Options }
     private GameNetworkRoomManager manager;
     private bool playSubMenuOpen = false;
     private Coroutine quickMatchCoroutine;
+    private bool quickMatchActive = false;
     private DiscoveredRoom pendingRoom;
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -170,6 +178,8 @@ public class LobbyUIController : MonoBehaviour
         backButton_Browser?.onClick.AddListener(() => ShowScreen(Screen.MainMenu));
         joinByCodeButton?.onClick.AddListener(ToggleJoinByCodePanel);
         joinByCodeConfirmButton?.onClick.AddListener(OnJoinByCode);
+        directConnectToggleButton?.onClick.AddListener(ToggleDirectConnectPanel);
+        directConnectButton?.onClick.AddListener(OnDirectConnect);
 
         // Password prompt
         passwordConfirmButton?.onClick.AddListener(OnPasswordConfirm);
@@ -246,37 +256,69 @@ public class LobbyUIController : MonoBehaviour
         ShowScreen(Screen.QuickMatchSearch);
         if (quickMatchStatusText != null) quickMatchStatusText.text = "Searching for a match...";
         if (quickMatchCoroutine != null) StopCoroutine(quickMatchCoroutine);
+        quickMatchActive = true;
         quickMatchCoroutine = StartCoroutine(QuickMatchCoroutine());
     }
 
     private IEnumerator QuickMatchCoroutine()
     {
-        const float searchInterval = 5f;
-        const float timeout = 60f;
+        const float totalTimeout = 60f;
         float elapsed = 0f;
 
-        while (elapsed < timeout && !NetworkClient.isConnected)
+        // ── Step 1: LAN search (3s) ──────────────────────────────────────────
+        if (quickMatchStatusText != null)
+            quickMatchStatusText.text = "Searching for a match...";
+
+        bool lanFound = false;
+        manager.RefreshRoomList((rooms) =>
         {
-            int remaining = Mathf.CeilToInt(timeout - elapsed);
+            var available = rooms.Where(r => r.currentPlayers < r.maxPlayers && !r.hasPassword).ToList();
+            if (available.Count > 0 && !NetworkClient.isConnected)
+            {
+                lanFound = true;
+                manager.JoinRoom(available[0].address, available[0].port);
+            }
+        });
+
+        // Wait for LAN discovery to finish (3s)
+        yield return new WaitForSeconds(4f);
+        elapsed += 4f;
+
+        if (NetworkClient.isConnected) { quickMatchActive = false; yield break; }
+
+        // ── Step 2: localhost attempt (same-machine testing) ─────────────────
+        if (!lanFound)
+        {
+            if (quickMatchStatusText != null)
+                quickMatchStatusText.text = "Trying local connection...";
+
+            manager.JoinRoom("localhost", 7777);
+            yield return new WaitForSeconds(3f);
+            elapsed += 3f;
+
+            if (NetworkClient.isConnected) { quickMatchActive = false; yield break; }
+        }
+
+        // ── Step 3: keep scanning LAN until timeout ──────────────────────────
+        while (elapsed < totalTimeout && !NetworkClient.isConnected)
+        {
+            int remaining = Mathf.CeilToInt(totalTimeout - elapsed);
             if (quickMatchStatusText != null)
                 quickMatchStatusText.text = $"Searching for a match... ({remaining}s)";
 
-            bool found = false;
             manager.RefreshRoomList((rooms) =>
             {
-                if (found || NetworkClient.isConnected) return;
                 var available = rooms.Where(r => r.currentPlayers < r.maxPlayers && !r.hasPassword).ToList();
-                if (available.Count > 0)
-                {
-                    found = true;
+                if (available.Count > 0 && !NetworkClient.isConnected)
                     manager.JoinRoom(available[0].address, available[0].port);
-                }
             });
 
-            yield return new WaitForSeconds(searchInterval);
-            elapsed += searchInterval;
+            yield return new WaitForSeconds(5f);
+            elapsed += 5f;
         }
 
+        // ── Step 4: give up ──────────────────────────────────────────────────
+        quickMatchActive = false;
         if (!NetworkClient.isConnected)
         {
             if (quickMatchStatusText != null)
@@ -288,6 +330,7 @@ public class LobbyUIController : MonoBehaviour
 
     private void StopQuickMatchSearch()
     {
+        quickMatchActive = false;
         if (quickMatchCoroutine != null)
         {
             StopCoroutine(quickMatchCoroutine);
@@ -303,21 +346,40 @@ public class LobbyUIController : MonoBehaviour
         if (browserStatusText != null) browserStatusText.text = "Searching for matches...";
         ClearChildren(roomListContent);
 
+        // Always show localhost for same-machine testing
+        CreateRoomEntry(MakeLocalhostRoom());
+
         manager.RefreshRoomList((rooms) =>
         {
+            // Remove old entries and re-add localhost + discovered rooms
             ClearChildren(roomListContent);
+            CreateRoomEntry(MakeLocalhostRoom());
 
             if (rooms.Count == 0)
             {
-                if (browserStatusText != null) browserStatusText.text = "No matches found on LAN.";
+                if (browserStatusText != null)
+                    browserStatusText.text = "No LAN matches found. Use localhost for same-PC testing.";
             }
             else
             {
-                if (browserStatusText != null) browserStatusText.text = $"Found {rooms.Count} match(es)";
+                if (browserStatusText != null) browserStatusText.text = $"Found {rooms.Count} LAN match(es)";
                 foreach (var room in rooms) CreateRoomEntry(room);
             }
         });
     }
+
+    private DiscoveredRoom MakeLocalhostRoom() => new DiscoveredRoom
+    {
+        roomName = "Local Game (this PC)",
+        address = "localhost",
+        port = 7777,
+        currentPlayers = 0,
+        maxPlayers = 0,
+        mapName = "localhost:7777",
+        serverId = -1,
+        hasPassword = false,
+        roomCode = ""
+    };
 
     private void CreateRoomEntry(DiscoveredRoom room)
     {
@@ -332,7 +394,8 @@ public class LobbyUIController : MonoBehaviour
         var joinButton = FindChildButton(entry, "JoinButton");
 
         if (mapText != null) mapText.text = room.mapName;
-        if (playersText != null) playersText.text = $"{room.currentPlayers}/{room.maxPlayers}";
+        if (playersText != null)
+            playersText.text = room.maxPlayers > 0 ? $"{room.currentPlayers}/{room.maxPlayers}" : "—";
         if (lockIcon != null) lockIcon.SetActive(room.hasPassword);
 
         if (joinButton != null)
@@ -360,6 +423,34 @@ public class LobbyUIController : MonoBehaviour
         }
     }
 
+    // ── Direct Connect (IP-based — LAN direct or internet) ───────────────────
+
+    private void ToggleDirectConnectPanel()
+    {
+        if (directConnectPanel != null)
+            directConnectPanel.SetActive(!directConnectPanel.activeSelf);
+    }
+
+    private void OnDirectConnect()
+    {
+        string input = directIPInput != null ? directIPInput.text.Trim() : "";
+        if (string.IsNullOrEmpty(input)) return;
+
+        string ip = input;
+        int port = 7777;
+
+        // Support "ip:port" format
+        int colonIdx = input.LastIndexOf(':');
+        if (colonIdx > 0 && int.TryParse(input.Substring(colonIdx + 1), out int parsedPort))
+        {
+            ip = input.Substring(0, colonIdx);
+            port = parsedPort;
+        }
+
+        Debug.Log($"[LobbyUI] Direct connect → {ip}:{port}");
+        manager.JoinRoom(ip, port);
+    }
+
     // ── Join By Code ──────────────────────────────────────────────────────────
 
     private void ToggleJoinByCodePanel()
@@ -380,9 +471,17 @@ public class LobbyUIController : MonoBehaviour
         {
             var match = rooms.FirstOrDefault(r => r.roomCode == code);
             if (match != null)
+            {
                 TryJoinRoom(match);
-            else if (browserStatusText != null)
-                browserStatusText.text = $"No room found with code \"{code}\".";
+            }
+            else
+            {
+                // Not found on LAN — try localhost (same-machine testing)
+                // Code is trusted since both instances are on the same PC
+                if (browserStatusText != null)
+                    browserStatusText.text = $"Not found on LAN. Trying local connection...";
+                manager.JoinRoom("localhost", 7777);
+            }
         });
     }
 
@@ -411,6 +510,11 @@ public class LobbyUIController : MonoBehaviour
     private void OnJoinFailed(string msg)
     {
         Debug.LogWarning($"[LobbyUI] Join failed: {msg}");
+
+        // During QuickMatch, failed attempts are expected (e.g. localhost with no server).
+        // Let the coroutine handle the flow — don't redirect to main menu.
+        if (quickMatchActive) return;
+
         if (msg.Contains("password") || msg.Contains("Password"))
         {
             OpenPasswordPrompt();

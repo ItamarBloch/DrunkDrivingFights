@@ -89,13 +89,20 @@ public class GameRoomDiscovery : NetworkDiscoveryBase<RoomDiscoveryRequest, Room
 
     // ─── Client: Find Rooms ───────────────────────────────────
 
-    public void FindRooms(Action<List<DiscoveredRoom>> callback, float timeout = 2f)
+    public void FindRooms(Action<List<DiscoveredRoom>> callback, float timeout = 3f)
     {
+        // Stop any in-progress search before starting a new one
+        if (searchTimer > 0)
+        {
+            StopDiscovery();
+            searchTimer = -1f;
+            searchCallback = null;
+        }
+
         discoveredRooms.Clear();
         searchCallback = callback;
         searchTimer = timeout;
 
-        // StartDiscovery sends broadcast requests to find servers
         StartDiscovery();
 
         Debug.Log("[Discovery] Started searching for rooms...");
