@@ -94,6 +94,7 @@ public class LobbyUIController : MonoBehaviour
     private Coroutine quickMatchCoroutine;
     private bool quickMatchActive = false;
     private DiscoveredRoom pendingRoom;
+    private bool _passwordWasAttempted = false; // true only after the user clicked Confirm
 
     // ─────────────────────────────────────────────────────────────────────────
 
@@ -286,7 +287,12 @@ public class LobbyUIController : MonoBehaviour
 
         if (NetworkClient.isConnected) { quickMatchActive = false; yield break; }
 
-        // ── Step 2: localhost attempt (same-machine testing) ─────────────────
+        // ── Step 2: localhost probe (same-machine testing) ───────────────────
+        // LAN broadcast doesn't reliably loop back on Windows, so same-machine games
+        // won't show up in step 1. We probe localhost directly.
+        // If the game there is password-protected the server rejects us — quickMatchActive
+        // suppresses all UI so the user never sees a prompt. The _pendingAuth guard in
+        // PasswordAuthenticator also prevents any stale rejection messages from firing later.
         if (!lanFound)
         {
             if (quickMatchStatusText != null)
@@ -346,40 +352,34 @@ public class LobbyUIController : MonoBehaviour
         if (browserStatusText != null) browserStatusText.text = "Searching for matches...";
         ClearChildren(roomListContent);
 
-        // Always show localhost for same-machine testing
-        CreateRoomEntry(MakeLocalhostRoom());
-
         manager.RefreshRoomList((rooms) =>
         {
-            // Remove old entries and re-add localhost + discovered rooms
             ClearChildren(roomListContent);
-            CreateRoomEntry(MakeLocalhostRoom());
 
-            if (rooms.Count == 0)
+            // Prefer a discovered room at localhost over a hardcoded entry so we get
+            // real data (hasPassword, player count, room name, map).
+            var localDiscovered = rooms.FirstOrDefault(r =>
+                r.address == "127.0.0.1" || r.address == "localhost" || r.address == "::1");
+
+            var remoteRooms = localDiscovered != null
+                ? rooms.Where(r => r.serverId != localDiscovered.serverId).ToList()
+                : rooms;
+
+            int total = remoteRooms.Count + (localDiscovered != null ? 1 : 0);
+
+            if (total == 0)
             {
                 if (browserStatusText != null)
-                    browserStatusText.text = "No LAN matches found. Use localhost for same-PC testing.";
+                    browserStatusText.text = "No matches found.";
             }
             else
             {
-                if (browserStatusText != null) browserStatusText.text = $"Found {rooms.Count} LAN match(es)";
-                foreach (var room in rooms) CreateRoomEntry(room);
+                if (browserStatusText != null) browserStatusText.text = $"Found {total} match(es)";
+                if (localDiscovered != null) CreateRoomEntry(localDiscovered);
+                foreach (var room in remoteRooms) CreateRoomEntry(room);
             }
         });
     }
-
-    private DiscoveredRoom MakeLocalhostRoom() => new DiscoveredRoom
-    {
-        roomName = "Local Game (this PC)",
-        address = "localhost",
-        port = 7777,
-        currentPlayers = 0,
-        maxPlayers = 0,
-        mapName = "localhost:7777",
-        serverId = -1,
-        hasPassword = false,
-        roomCode = ""
-    };
 
     private void CreateRoomEntry(DiscoveredRoom room)
     {
@@ -388,11 +388,13 @@ public class LobbyUIController : MonoBehaviour
         GameObject entry = Instantiate(roomEntryPrefab, roomListContent);
         entry.SetActive(true);
 
+        var roomNameText = FindChildTMP(entry, "RoomNameText");
         var mapText = FindChildTMP(entry, "MapText");
         var playersText = FindChildTMP(entry, "PlayersText");
         var lockIcon = FindChildGameObject(entry, "LockIcon");
         var joinButton = FindChildButton(entry, "JoinButton");
 
+        if (roomNameText != null) roomNameText.text = room.roomName;
         if (mapText != null) mapText.text = room.mapName;
         if (playersText != null)
             playersText.text = room.maxPlayers > 0 ? $"{room.currentPlayers}/{room.maxPlayers}" : "—";
@@ -412,9 +414,13 @@ public class LobbyUIController : MonoBehaviour
 
     private void TryJoinRoom(DiscoveredRoom room)
     {
+        // Always set pendingRoom so OnJoinFailed("Wrong password.") can retry with the prompt
+        // even if the room wasn't marked as password-protected in the browser.
+        pendingRoom = room;
+        _passwordWasAttempted = false;
+
         if (room.hasPassword)
         {
-            pendingRoom = room;
             OpenPasswordPrompt();
         }
         else
@@ -487,11 +493,12 @@ public class LobbyUIController : MonoBehaviour
 
     // ── Password Prompt ───────────────────────────────────────────────────────
 
-    private void OpenPasswordPrompt()
+    private void OpenPasswordPrompt(bool isRetry = false)
     {
         if (passwordPromptPanel != null) passwordPromptPanel.SetActive(true);
         if (passwordPromptInput != null) passwordPromptInput.text = "";
-        if (passwordPromptStatus != null) passwordPromptStatus.text = "";
+        if (passwordPromptStatus != null)
+            passwordPromptStatus.text = isRetry ? "Wrong password. Try again." : "";
     }
 
     private void ClosePasswordPrompt()
@@ -503,22 +510,26 @@ public class LobbyUIController : MonoBehaviour
     {
         if (pendingRoom == null) { ClosePasswordPrompt(); return; }
         string pwd = passwordPromptInput != null ? passwordPromptInput.text : "";
+        _passwordWasAttempted = true;
         ClosePasswordPrompt();
-        manager.JoinRoom(pendingRoom.address, pendingRoom.port, pwd, pendingRoom.passwordHash);
+        manager.JoinRoom(pendingRoom.address, pendingRoom.port, pwd);
     }
 
     private void OnJoinFailed(string msg)
     {
-        Debug.LogWarning($"[LobbyUI] Join failed: {msg}");
+        Debug.Log($"[LobbyUI] Join failed: {msg}");
 
-        // During QuickMatch, failed attempts are expected (e.g. localhost with no server).
-        // Let the coroutine handle the flow — don't redirect to main menu.
+        // During QuickMatch, failed attempts are expected — let the coroutine handle flow.
         if (quickMatchActive) return;
 
         if (msg.Contains("password") || msg.Contains("Password"))
         {
-            OpenPasswordPrompt();
-            if (passwordPromptStatus != null) passwordPromptStatus.text = "Wrong password. Try again.";
+            // Ensure we're on the browser screen first so the prompt has a panel to appear over.
+            // Something can navigate away during the 1-second server-side delay before rejection.
+            ShowScreen(Screen.MatchBrowser);
+            bool isRetry = _passwordWasAttempted;
+            _passwordWasAttempted = false;
+            OpenPasswordPrompt(isRetry);
         }
         else
         {

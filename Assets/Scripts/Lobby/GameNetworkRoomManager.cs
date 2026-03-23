@@ -21,6 +21,7 @@ public class GameNetworkRoomManager : NetworkRoomManager
     [HideInInspector] public string roomPassword = "";
 
     private GameRoomDiscovery discovery;
+    private PasswordAuthenticator passwordAuthenticator;
 
     // Events for UI
     public event System.Action OnLobbyPlayersUpdated;
@@ -75,6 +76,12 @@ public class GameNetworkRoomManager : NetworkRoomManager
         discovery = GetComponent<GameRoomDiscovery>();
         if (discovery == null)
             discovery = gameObject.AddComponent<GameRoomDiscovery>();
+
+        // Password authenticator — enforces passwords server-side
+        passwordAuthenticator = GetComponent<PasswordAuthenticator>();
+        if (passwordAuthenticator == null)
+            passwordAuthenticator = gameObject.AddComponent<PasswordAuthenticator>();
+        authenticator = passwordAuthenticator;
 
         base.Awake();
     }
@@ -131,7 +138,11 @@ public class GameNetworkRoomManager : NetworkRoomManager
         roomPassword = password;
         roomCode = GenerateRoomCode();
 
-        Debug.Log($"[Lobby] Creating room '{roomName}' | Map: {map.displayName} | Code: {roomCode} | Max: {maxConnections}");
+        // Host's own client connection also goes through auth
+        if (passwordAuthenticator != null)
+            passwordAuthenticator.clientPasswordHash = string.IsNullOrEmpty(password) ? 0 : password.GetHashCode();
+
+        Debug.Log($"[Lobby] Creating room '{roomName}' | Map: {map.displayName} | Code: {roomCode} | Max: {maxConnections} | Password: {(string.IsNullOrEmpty(password) ? "none" : "set")}");
 
         try
         {
@@ -163,7 +174,7 @@ public class GameNetworkRoomManager : NetworkRoomManager
 
         discovery.FindRooms((rooms) =>
         {
-            var available = rooms.Where(r => r.currentPlayers < r.maxPlayers).ToList();
+            var available = rooms.Where(r => r.currentPlayers < r.maxPlayers && !r.hasPassword).ToList();
 
             if (available.Count > 0)
             {
@@ -181,22 +192,24 @@ public class GameNetworkRoomManager : NetworkRoomManager
         });
     }
 
-    public void JoinRoom(string address, int port = 7777, string password = "", int expectedPasswordHash = 0)
+    public void JoinRoom(string address, int port = 7777, string password = "")
     {
-        if (expectedPasswordHash != 0 && HashPassword(password) != expectedPasswordHash)
-        {
-            Debug.LogWarning("[Lobby] Wrong password entered.");
-            OnJoinFailed?.Invoke("Wrong password. Please try again.");
-            return;
-        }
+        // Server enforces the password via PasswordAuthenticator — set the hash to send
+        if (passwordAuthenticator != null)
+            passwordAuthenticator.clientPasswordHash = string.IsNullOrEmpty(password) ? 0 : password.GetHashCode();
 
         networkAddress = address;
-        var activeTransport = Transport.active;
-        if (activeTransport is kcp2k.KcpTransport kcpTransport)
+        if (Transport.active is kcp2k.KcpTransport kcpTransport)
             kcpTransport.port = (ushort)port;
 
         Debug.Log($"[Lobby] Joining room at {address}:{port}");
         StartClient();
+    }
+
+    /// <summary>Called by PasswordAuthenticator when the server rejects a connection.</summary>
+    public void NotifyJoinFailed(string reason)
+    {
+        OnJoinFailed?.Invoke(reason);
     }
 
     /// <summary>Host kicks a player by their network identity netId.</summary>
