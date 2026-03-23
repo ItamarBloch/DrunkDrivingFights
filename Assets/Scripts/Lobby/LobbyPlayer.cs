@@ -25,6 +25,9 @@ public class LobbyPlayer : NetworkRoomPlayer
     [SyncVar]
     public int syncedMaxPlayers = 6;
 
+    [SyncVar]
+    public string syncedRoomCode = "";
+
     public static readonly Color[] AvailableColors = new Color[]
     {
         new Color(0.9f, 0.2f, 0.2f),  // Red
@@ -72,7 +75,7 @@ public class LobbyPlayer : NetworkRoomPlayer
     }
 
     /// <summary>
-    /// Called by UI button. NOT a Command — it calls CmdChangeReadyState 
+    /// Called by UI button. NOT a Command ï¿½ it calls CmdChangeReadyState 
     /// which IS Mirror's built-in Command for changing ready state.
     /// Must be called on the client (isOwned).
     /// </summary>

@@ -17,8 +17,11 @@ public class GameNetworkRoomManager : NetworkRoomManager
 
     [HideInInspector] public string roomName = "New Room";
     [HideInInspector] public string selectedMap = "";
+    [HideInInspector] public string roomCode = "";
+    [HideInInspector] public string roomPassword = "";
 
     private GameRoomDiscovery discovery;
+    private PasswordAuthenticator passwordAuthenticator;
 
     // Events for UI
     public event System.Action OnLobbyPlayersUpdated;
@@ -74,6 +77,12 @@ public class GameNetworkRoomManager : NetworkRoomManager
         if (discovery == null)
             discovery = gameObject.AddComponent<GameRoomDiscovery>();
 
+        // Password authenticator — enforces passwords server-side
+        passwordAuthenticator = GetComponent<PasswordAuthenticator>();
+        if (passwordAuthenticator == null)
+            passwordAuthenticator = gameObject.AddComponent<PasswordAuthenticator>();
+        authenticator = passwordAuthenticator;
+
         base.Awake();
     }
 
@@ -113,7 +122,7 @@ public class GameNetworkRoomManager : NetworkRoomManager
     /// <summary>
     /// Create a room using a map index from the MapRegistry.
     /// </summary>
-    public void CreateRoom(string name, int maxPlayers, int mapIndex)
+    public void CreateRoom(string name, int maxPlayers, int mapIndex, string password = "")
     {
         MapData map = mapRegistry.GetMap(mapIndex);
         if (map == null)
@@ -126,8 +135,14 @@ public class GameNetworkRoomManager : NetworkRoomManager
         maxConnections = Mathf.Clamp(maxPlayers, 2, map.maxPlayers);
         selectedMap = map.displayName;
         GameplayScene = map.sceneName;
+        roomPassword = password;
+        roomCode = GenerateRoomCode();
 
-        Debug.Log($"[Lobby] Creating room '{roomName}' | Map: {map.displayName} ({map.sceneName}) | Max: {maxConnections}");
+        // Host's own client connection also goes through auth
+        if (passwordAuthenticator != null)
+            passwordAuthenticator.clientPasswordHash = string.IsNullOrEmpty(password) ? 0 : password.GetHashCode();
+
+        Debug.Log($"[Lobby] Creating room '{roomName}' | Map: {map.displayName} | Code: {roomCode} | Max: {maxConnections} | Password: {(string.IsNullOrEmpty(password) ? "none" : "set")}");
 
         try
         {
@@ -141,13 +156,25 @@ public class GameNetworkRoomManager : NetworkRoomManager
         }
     }
 
+    private string GenerateRoomCode()
+    {
+        const string chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+        var sb = new System.Text.StringBuilder();
+        for (int i = 0; i < 6; i++)
+            sb.Append(chars[Random.Range(0, chars.Length)]);
+        return sb.ToString();
+    }
+
+    private static int HashPassword(string pwd) =>
+        string.IsNullOrEmpty(pwd) ? 0 : pwd.GetHashCode();
+
     public void QuickMatch()
     {
         Debug.Log("[Lobby] Quick match — searching...");
 
         discovery.FindRooms((rooms) =>
         {
-            var available = rooms.Where(r => r.currentPlayers < r.maxPlayers).ToList();
+            var available = rooms.Where(r => r.currentPlayers < r.maxPlayers && !r.hasPassword).ToList();
 
             if (available.Count > 0)
             {
@@ -165,15 +192,35 @@ public class GameNetworkRoomManager : NetworkRoomManager
         });
     }
 
-    public void JoinRoom(string address, int port = 7777)
+    public void JoinRoom(string address, int port = 7777, string password = "")
     {
+        // Server enforces the password via PasswordAuthenticator — set the hash to send
+        if (passwordAuthenticator != null)
+            passwordAuthenticator.clientPasswordHash = string.IsNullOrEmpty(password) ? 0 : password.GetHashCode();
+
         networkAddress = address;
-        var activeTransport = Transport.active;
-        if (activeTransport is kcp2k.KcpTransport kcpTransport)
+        if (Transport.active is kcp2k.KcpTransport kcpTransport)
             kcpTransport.port = (ushort)port;
 
         Debug.Log($"[Lobby] Joining room at {address}:{port}");
         StartClient();
+    }
+
+    /// <summary>Called by PasswordAuthenticator when the server rejects a connection.</summary>
+    public void NotifyJoinFailed(string reason)
+    {
+        OnJoinFailed?.Invoke(reason);
+    }
+
+    /// <summary>Host kicks a player by their network identity netId.</summary>
+    public void KickPlayer(uint targetNetId)
+    {
+        if (!NetworkServer.active) return;
+        if (NetworkServer.spawned.TryGetValue(targetNetId, out var identity))
+        {
+            Debug.Log($"[Lobby] Kicking player netId={targetNetId}");
+            identity.connectionToClient?.Disconnect();
+        }
     }
 
     public void LeaveRoom()
@@ -231,7 +278,9 @@ public class GameNetworkRoomManager : NetworkRoomManager
     {
         base.OnRoomStartServer();
         Debug.Log("[Lobby] Server started — beginning advertisement");
-        discovery?.AdvertiseRoom(roomName, maxConnections, selectedMap);
+        bool hasPassword = !string.IsNullOrEmpty(roomPassword);
+        discovery?.AdvertiseRoom(roomName, maxConnections, selectedMap,
+            hasPassword, HashPassword(roomPassword), roomCode);
     }
 
     public override void OnRoomServerConnect(NetworkConnectionToClient conn)
@@ -276,6 +325,7 @@ public class GameNetworkRoomManager : NetworkRoomManager
             lp.syncedRoomName = roomName;
             lp.syncedMapName = selectedMap;
             lp.syncedMaxPlayers = maxConnections;
+            lp.syncedRoomCode = roomCode;
 
             // Host is always considered ready via AllPlayersReady check
             // (we skip owner in the ready check instead of setting the SyncVar)

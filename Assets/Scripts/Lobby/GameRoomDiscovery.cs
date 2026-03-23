@@ -18,6 +18,9 @@ public class DiscoveredRoom
     public string mapName;
     public long serverId;
     public DateTime lastSeen;
+    public bool hasPassword;
+    public int passwordHash;
+    public string roomCode;
 }
 
 public struct RoomDiscoveryRequest : NetworkMessage
@@ -33,6 +36,9 @@ public struct RoomDiscoveryResponse : NetworkMessage
     public string mapName;
     public long serverId;
     public int port;
+    public bool hasPassword;
+    public int passwordHash;
+    public string roomCode;
 }
 
 // ─── Discovery Component ──────────────────────────────────────
@@ -45,6 +51,9 @@ public class GameRoomDiscovery : NetworkDiscoveryBase<RoomDiscoveryRequest, Room
     private string hostRoomName = "";
     private int hostMaxPlayers = 6;
     private string hostMapName = "";
+    private bool hostHasPassword = false;
+    private int hostPasswordHash = 0;
+    private string hostRoomCode = "";
 
     // Search state
     private Action<List<DiscoveredRoom>> searchCallback;
@@ -52,13 +61,16 @@ public class GameRoomDiscovery : NetworkDiscoveryBase<RoomDiscoveryRequest, Room
 
     // ─── Host: Advertise ──────────────────────────────────────
 
-    public void AdvertiseRoom(string roomName, int maxPlayers, string mapName)
+    public void AdvertiseRoom(string roomName, int maxPlayers, string mapName,
+        bool hasPassword = false, int passwordHash = 0, string roomCode = "")
     {
         hostRoomName = roomName;
         hostMaxPlayers = maxPlayers;
         hostMapName = mapName;
+        hostHasPassword = hasPassword;
+        hostPasswordHash = passwordHash;
+        hostRoomCode = roomCode;
 
-        // AdvertiseServer starts listening for client broadcasts and responding
         AdvertiseServer();
         isAdvertising = true;
 
@@ -77,13 +89,20 @@ public class GameRoomDiscovery : NetworkDiscoveryBase<RoomDiscoveryRequest, Room
 
     // ─── Client: Find Rooms ───────────────────────────────────
 
-    public void FindRooms(Action<List<DiscoveredRoom>> callback, float timeout = 2f)
+    public void FindRooms(Action<List<DiscoveredRoom>> callback, float timeout = 3f)
     {
+        // Stop any in-progress search before starting a new one
+        if (searchTimer > 0)
+        {
+            StopDiscovery();
+            searchTimer = -1f;
+            searchCallback = null;
+        }
+
         discoveredRooms.Clear();
         searchCallback = callback;
         searchTimer = timeout;
 
-        // StartDiscovery sends broadcast requests to find servers
         StartDiscovery();
 
         Debug.Log("[Discovery] Started searching for rooms...");
@@ -147,7 +166,10 @@ public class GameRoomDiscovery : NetworkDiscoveryBase<RoomDiscoveryRequest, Room
             maxPlayers = response.maxPlayers,
             mapName = response.mapName,
             serverId = response.serverId,
-            lastSeen = DateTime.Now
+            lastSeen = DateTime.Now,
+            hasPassword = response.hasPassword,
+            passwordHash = response.passwordHash,
+            roomCode = response.roomCode
         };
 
         discoveredRooms[response.serverId] = room;
@@ -176,7 +198,10 @@ public class GameRoomDiscovery : NetworkDiscoveryBase<RoomDiscoveryRequest, Room
             maxPlayers = hostMaxPlayers,
             mapName = hostMapName,
             serverId = ServerId,
-            port = GetPort()
+            port = GetPort(),
+            hasPassword = hostHasPassword,
+            passwordHash = hostPasswordHash,
+            roomCode = hostRoomCode
         };
     }
 
