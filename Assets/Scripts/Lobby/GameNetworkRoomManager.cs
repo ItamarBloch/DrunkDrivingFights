@@ -1,6 +1,7 @@
 using UnityEngine;
 using UnityEngine.SceneManagement;
 using Mirror;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 
@@ -22,12 +23,13 @@ public class GameNetworkRoomManager : NetworkRoomManager
 
     private GameRoomDiscovery discovery;
     private PasswordAuthenticator passwordAuthenticator;
+    private GlobalMatchmakingClient globalClient;
 
     // Events for UI
-    public event System.Action OnLobbyPlayersUpdated;
-    public event System.Action<string> OnRoomCreated;
-    public event System.Action OnGameStarting;
-    public event System.Action<string> OnJoinFailed;
+    public event Action OnLobbyPlayersUpdated;
+    public event Action<string> OnRoomCreated;
+    public event Action OnGameStarting;
+    public event Action<string> OnJoinFailed;
 
     // State
     public bool IsOwner => NetworkServer.active && NetworkClient.isConnected;
@@ -72,10 +74,15 @@ public class GameNetworkRoomManager : NetworkRoomManager
             transport = kcp;
         }
 
-        // Discovery — set up early so it's ready for all callbacks
+        // Discovery — LAN broadcast
         discovery = GetComponent<GameRoomDiscovery>();
         if (discovery == null)
             discovery = gameObject.AddComponent<GameRoomDiscovery>();
+
+        // Global matchmaking client — HTTP-based, works over internet
+        globalClient = GetComponent<GlobalMatchmakingClient>();
+        if (globalClient == null)
+            globalClient = gameObject.AddComponent<GlobalMatchmakingClient>();
 
         // Password authenticator — enforces passwords server-side
         passwordAuthenticator = GetComponent<PasswordAuthenticator>();
@@ -92,7 +99,6 @@ public class GameNetworkRoomManager : NetworkRoomManager
         maxConnections = defaultMaxPlayers;
         showRoomGUI = false;
 
-        // Validate map registry
         if (mapRegistry == null)
         {
             Debug.LogError("[Lobby] MapRegistry not assigned! Right-click in Project → Create → Game → Map Registry, then assign it.");
@@ -105,16 +111,12 @@ public class GameNetworkRoomManager : NetworkRoomManager
             return;
         }
 
-        // Set default map to first in registry
         selectedMap = mapRegistry.GetMap(0).sceneName;
-
-        // Validate all scenes exist in Build Settings (editor only)
         mapRegistry.ValidateMaps();
 
-        Debug.Log($"[Lobby] Ready — {mapRegistry.Count} map(s) available");
+        Debug.Log($"[Lobby] Ready — {mapRegistry.Count} map(s) available | Global matchmaking: {(globalClient.IsConfigured ? "enabled" : "disabled (no server URL)")}");
     }
 
-    // Suppress Mirror's built-in GUI completely
     public override void OnGUI() { }
 
     // ─── Room Actions ─────────────────────────────────────────────
@@ -138,7 +140,6 @@ public class GameNetworkRoomManager : NetworkRoomManager
         roomPassword = password;
         roomCode = GenerateRoomCode();
 
-        // Host's own client connection also goes through auth
         if (passwordAuthenticator != null)
             passwordAuthenticator.clientPasswordHash = string.IsNullOrEmpty(password) ? 0 : password.GetHashCode();
 
@@ -161,40 +162,15 @@ public class GameNetworkRoomManager : NetworkRoomManager
         const string chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
         var sb = new System.Text.StringBuilder();
         for (int i = 0; i < 6; i++)
-            sb.Append(chars[Random.Range(0, chars.Length)]);
+            sb.Append(chars[UnityEngine.Random.Range(0, chars.Length)]);
         return sb.ToString();
     }
 
     private static int HashPassword(string pwd) =>
         string.IsNullOrEmpty(pwd) ? 0 : pwd.GetHashCode();
 
-    public void QuickMatch()
-    {
-        Debug.Log("[Lobby] Quick match — searching...");
-
-        discovery.FindRooms((rooms) =>
-        {
-            var available = rooms.Where(r => r.currentPlayers < r.maxPlayers && !r.hasPassword).ToList();
-
-            if (available.Count > 0)
-            {
-                var room = available[0];
-                Debug.Log($"[Lobby] Quick match — joining '{room.roomName}'");
-                JoinRoom(room.address, room.port);
-            }
-            else
-            {
-                // Try joining localhost first (same machine testing)
-                // If that fails, then try creating a new room
-                Debug.Log("[Lobby] Quick match — no rooms found, trying localhost...");
-                JoinRoom("localhost", 7777);
-            }
-        });
-    }
-
     public void JoinRoom(string address, int port = 7777, string password = "")
     {
-        // Server enforces the password via PasswordAuthenticator — set the hash to send
         if (passwordAuthenticator != null)
             passwordAuthenticator.clientPasswordHash = string.IsNullOrEmpty(password) ? 0 : password.GetHashCode();
 
@@ -228,6 +204,7 @@ public class GameNetworkRoomManager : NetworkRoomManager
         if (IsOwner)
         {
             discovery.StopAdvertising();
+            globalClient.UnregisterSession();
             StopHost();
         }
         else
@@ -238,25 +215,21 @@ public class GameNetworkRoomManager : NetworkRoomManager
 
     /// <summary>
     /// Returns all players to the lobby while keeping the room alive.
-    ///
-    /// Host:   ServerChangeScene(RoomScene) — all connected clients follow automatically.
-    ///         The room is preserved; a new match can be started immediately.
-    ///
-    /// Client: StopClient() + load lobby — they disconnect and land in the lobby UI.
-    ///         If the host changes scene first, the client is taken there automatically
-    ///         (and this code never runs for them).
+    /// Host: ServerChangeScene(RoomScene) — all connected clients follow.
+    /// Client: StopClient() + load lobby scene.
     /// </summary>
     public void ReturnToLobby()
     {
         if (IsOwner)
         {
             discovery.StopAdvertising();
+            globalClient.UnregisterSession();
             ServerChangeScene(RoomScene);
         }
         else
         {
             StopClient();
-            UnityEngine.SceneManagement.SceneManager.LoadScene("LobbyScene");
+            SceneManager.LoadScene("LobbyScene");
         }
     }
 
@@ -268,6 +241,7 @@ public class GameNetworkRoomManager : NetworkRoomManager
 
         OnGameStarting?.Invoke();
         discovery.StopAdvertising();
+        globalClient.UnregisterSession();
         Debug.Log($"[Lobby] Starting game — {CurrentPlayerCount} players");
         ServerChangeScene(GameplayScene);
     }
@@ -277,10 +251,22 @@ public class GameNetworkRoomManager : NetworkRoomManager
     public override void OnRoomStartServer()
     {
         base.OnRoomStartServer();
-        Debug.Log("[Lobby] Server started — beginning advertisement");
+        Debug.Log("[Lobby] Server started — beginning LAN advertisement");
+
         bool hasPassword = !string.IsNullOrEmpty(roomPassword);
+        int port = GetGamePort();
+
+        // LAN: UDP broadcast on local network
         discovery?.AdvertiseRoom(roomName, maxConnections, selectedMap,
             hasPassword, HashPassword(roomPassword), roomCode);
+
+        // Global: register with the central matchmaking server
+        globalClient?.RegisterSession(
+            roomName, maxConnections, selectedMap,
+            hasPassword, roomCode, port,
+            success => Debug.Log(success
+                ? "[Lobby] Globally registered"
+                : "[Lobby] Global registration failed — room is LAN-only"));
     }
 
     public override void OnRoomServerConnect(NetworkConnectionToClient conn)
@@ -295,11 +281,12 @@ public class GameNetworkRoomManager : NetworkRoomManager
         base.OnRoomServerDisconnect(conn);
         Debug.Log($"[Lobby] Player disconnected: {conn.connectionId}");
 
-        // Notify MatchManager so a mid-match disconnect counts as a death.
         if (MatchManager.singleton != null && conn.identity != null)
             MatchManager.singleton.HandlePlayerDisconnected(conn.identity.netId);
 
-        Invoke(nameof(FirePlayersUpdated), 0.1f);
+        // Push updated count to global server after slight delay so roomSlots updates first
+        Invoke(nameof(PushPlayerCountToGlobal), 0.3f);
+        Invoke(nameof(FirePlayersUpdated), 0.3f);
     }
 
     private void FirePlayersUpdated()
@@ -308,9 +295,13 @@ public class GameNetworkRoomManager : NetworkRoomManager
         OnLobbyPlayersUpdated?.Invoke();
     }
 
+    private void PushPlayerCountToGlobal()
+    {
+        globalClient?.UpdatePlayerCount(CurrentPlayerCount);
+    }
+
     public override GameObject OnRoomServerCreateRoomPlayer(NetworkConnectionToClient conn)
     {
-        // Instantiate ourselves — base can return null in some Mirror versions
         GameObject obj = Instantiate(roomPlayerPrefab.gameObject, Vector3.zero, Quaternion.identity);
         if (obj == null)
         {
@@ -321,17 +312,16 @@ public class GameNetworkRoomManager : NetworkRoomManager
         if (obj.TryGetComponent<LobbyPlayer>(out var lp))
         {
             lp.isRoomOwner = (conn.connectionId == 0);
-            // Sync room info to all clients via the player object
             lp.syncedRoomName = roomName;
             lp.syncedMapName = selectedMap;
             lp.syncedMaxPlayers = maxConnections;
             lp.syncedRoomCode = roomCode;
 
-            // Host is always considered ready via AllPlayersReady check
-            // (we skip owner in the ready check instead of setting the SyncVar)
-
             Debug.Log($"[Lobby] Room player created | conn: {conn.connectionId} | owner: {lp.isRoomOwner}");
         }
+
+        // After a small delay (so roomSlots is updated), push count to global
+        Invoke(nameof(PushPlayerCountToGlobal), 0.5f);
 
         return obj;
     }
@@ -365,7 +355,6 @@ public class GameNetworkRoomManager : NetworkRoomManager
         return new Vector3(Mathf.Cos(angle) * radius, 1f, Mathf.Sin(angle) * radius);
     }
 
-    // Don't auto-start — owner clicks Start
     public override void OnRoomServerPlayersReady()
     {
         Debug.Log("[Lobby] All players ready — waiting for owner to start");
@@ -396,6 +385,51 @@ public class GameNetworkRoomManager : NetworkRoomManager
         OnJoinFailed?.Invoke($"Connection failed: {reason}");
     }
 
+    // ─── Room List (LAN + Global merged) ──────────────────────────
+
+    /// <summary>
+    /// Searches for rooms on both LAN (UDP broadcast) and the global matchmaking server
+    /// simultaneously, merges the results (deduplicated by address:port), and calls
+    /// <paramref name="callback"/> when both sources have responded.
+    ///
+    /// LAN results take priority in the merge so locally-discovered data is always current.
+    /// The callback is guaranteed to be called exactly once.
+    /// </summary>
+    public void RefreshRoomList(Action<List<DiscoveredRoom>> callback)
+    {
+        // If global matchmaking is not configured, use LAN only
+        if (globalClient == null || !globalClient.IsConfigured)
+        {
+            discovery.FindRooms(callback);
+            return;
+        }
+
+        List<DiscoveredRoom> lanResults    = null;
+        List<DiscoveredRoom> globalResults = null;
+        bool callbackFired = false;
+
+        void TryMergeAndReturn()
+        {
+            if (callbackFired) return;
+            if (lanResults == null || globalResults == null) return;
+            callbackFired = true;
+
+            // Merge: key = "address:port". LAN data wins (more accurate for nearby sessions).
+            var merged = new Dictionary<string, DiscoveredRoom>();
+            foreach (var r in globalResults)
+                merged[$"{r.address}:{r.port}"] = r;
+            foreach (var r in lanResults)
+                merged[$"{r.address}:{r.port}"] = r;
+
+            var list = merged.Values.ToList();
+            Debug.Log($"[Lobby] Room list refreshed — {lanResults.Count} LAN, {globalResults.Count} global, {list.Count} unique");
+            callback?.Invoke(list);
+        }
+
+        discovery.FindRooms(rooms    => { lanResults    = rooms; TryMergeAndReturn(); });
+        globalClient.FetchSessions(rooms => { globalResults = rooms; TryMergeAndReturn(); });
+    }
+
     // ─── Helpers ──────────────────────────────────────────────────
 
     public List<LobbyPlayer> GetLobbyPlayers()
@@ -407,8 +441,10 @@ public class GameNetworkRoomManager : NetworkRoomManager
             .ToList();
     }
 
-    public void RefreshRoomList(System.Action<List<DiscoveredRoom>> callback)
+    private int GetGamePort()
     {
-        discovery.FindRooms(callback);
+        if (Transport.active is kcp2k.KcpTransport kcp)
+            return kcp.port;
+        return 7777;
     }
 }

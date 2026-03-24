@@ -92,9 +92,22 @@ public class LobbyUIController : MonoBehaviour
     private GameNetworkRoomManager manager;
     private bool playSubMenuOpen = false;
     private Coroutine quickMatchCoroutine;
+    private Coroutine quickMatchTimerCoroutine;
     private bool quickMatchActive = false;
+
+    // Set by OnJoinFailed so QuickMatchCoroutine knows the last join attempt failed
+    // without halting the search entirely.
+    private bool _quickMatchJoinFailed = false;
+
+    // Timer state — updated every frame by QuickMatchTimerCoroutine
+    private float _quickMatchElapsed = 0f;
+    private string _quickMatchBaseStatus = "";
+
+    // 99 minutes 59 seconds — display limit before auto-cancel
+    private const float QuickMatchMaxSeconds = 99f * 60f + 59f;
+
     private DiscoveredRoom pendingRoom;
-    private bool _passwordWasAttempted = false; // true only after the user clicked Confirm
+    private bool _passwordWasAttempted = false;
 
     // ─────────────────────────────────────────────────────────────────────────
 
@@ -255,93 +268,164 @@ public class LobbyUIController : MonoBehaviour
     {
         SetPlaySubMenu(false);
         ShowScreen(Screen.QuickMatchSearch);
-        if (quickMatchStatusText != null) quickMatchStatusText.text = "Searching for a match...";
+
         if (quickMatchCoroutine != null) StopCoroutine(quickMatchCoroutine);
+        if (quickMatchTimerCoroutine != null) StopCoroutine(quickMatchTimerCoroutine);
+
         quickMatchActive = true;
-        quickMatchCoroutine = StartCoroutine(QuickMatchCoroutine());
+        _quickMatchJoinFailed = false;
+        _quickMatchElapsed = 0f;
+        _quickMatchBaseStatus = "Searching for a match...";
+
+        quickMatchTimerCoroutine = StartCoroutine(QuickMatchTimerCoroutine());
+        quickMatchCoroutine      = StartCoroutine(QuickMatchCoroutine());
     }
 
+    /// <summary>
+    /// Runs every frame while QuickMatch is active.
+    /// Tracks elapsed time, updates the display, and auto-cancels at 99:59.
+    /// </summary>
+    private IEnumerator QuickMatchTimerCoroutine()
+    {
+        while (quickMatchActive && !NetworkClient.isConnected)
+        {
+            _quickMatchElapsed += Time.deltaTime;
+            RefreshQuickMatchDisplay();
+
+            if (_quickMatchElapsed >= QuickMatchMaxSeconds)
+            {
+                Debug.Log("[QuickMatch] Time limit reached (99:59) — cancelling search");
+                StopQuickMatchSearch();
+                yield break;
+            }
+
+            yield return null;
+        }
+    }
+
+    /// <summary>
+    /// Rebuilds the status text as:  "{base message}\n{MM:SS}"
+    /// Call after changing _quickMatchBaseStatus or from the timer loop.
+    /// </summary>
+    private void RefreshQuickMatchDisplay()
+    {
+        if (quickMatchStatusText == null) return;
+        int total = Mathf.FloorToInt(_quickMatchElapsed);
+        int mins  = Mathf.Min(total / 60, 99);
+        int secs  = total % 60;
+        quickMatchStatusText.text = $"{_quickMatchBaseStatus}\n{mins:00}:{secs:00}";
+    }
+
+    /// <summary>
+    /// Continuously searches LAN + global servers for an available match.
+    ///
+    /// Flow per iteration:
+    ///   1. Refresh room list (LAN broadcast + HTTP fetch, ~3-4s)
+    ///   2. Filter: not full, not password protected
+    ///   3. For each candidate, attempt to join and wait for success or failure
+    ///   4. If all attempts fail or no rooms found → wait 5s → repeat from step 1
+    ///
+    /// Stops when: player cancels, connection succeeds, or timer hits 99:59.
+    /// </summary>
     private IEnumerator QuickMatchCoroutine()
     {
-        const float totalTimeout = 60f;
-        float elapsed = 0f;
-
-        // ── Step 1: LAN search (3s) ──────────────────────────────────────────
-        if (quickMatchStatusText != null)
-            quickMatchStatusText.text = "Searching for a match...";
-
-        bool lanFound = false;
-        manager.RefreshRoomList((rooms) =>
+        while (quickMatchActive && !NetworkClient.isConnected)
         {
-            var available = rooms.Where(r => r.currentPlayers < r.maxPlayers && !r.hasPassword).ToList();
-            if (available.Count > 0 && !NetworkClient.isConnected)
+            _quickMatchBaseStatus = "Searching for a match...";
+
+            // ── Step 1: Collect rooms from LAN + global ───────────────────────
+            bool searchDone = false;
+            List<DiscoveredRoom> candidates = new();
+
+            manager.RefreshRoomList(rooms =>
             {
-                lanFound = true;
-                manager.JoinRoom(available[0].address, available[0].port);
-            }
-        });
-
-        // Wait for LAN discovery to finish (3s)
-        yield return new WaitForSeconds(4f);
-        elapsed += 4f;
-
-        if (NetworkClient.isConnected) { quickMatchActive = false; yield break; }
-
-        // ── Step 2: localhost probe (same-machine testing) ───────────────────
-        // LAN broadcast doesn't reliably loop back on Windows, so same-machine games
-        // won't show up in step 1. We probe localhost directly.
-        // If the game there is password-protected the server rejects us — quickMatchActive
-        // suppresses all UI so the user never sees a prompt. The _pendingAuth guard in
-        // PasswordAuthenticator also prevents any stale rejection messages from firing later.
-        if (!lanFound)
-        {
-            if (quickMatchStatusText != null)
-                quickMatchStatusText.text = "Trying local connection...";
-
-            manager.JoinRoom("localhost", 7777);
-            yield return new WaitForSeconds(3f);
-            elapsed += 3f;
-
-            if (NetworkClient.isConnected) { quickMatchActive = false; yield break; }
-        }
-
-        // ── Step 3: keep scanning LAN until timeout ──────────────────────────
-        while (elapsed < totalTimeout && !NetworkClient.isConnected)
-        {
-            int remaining = Mathf.CeilToInt(totalTimeout - elapsed);
-            if (quickMatchStatusText != null)
-                quickMatchStatusText.text = $"Searching for a match... ({remaining}s)";
-
-            manager.RefreshRoomList((rooms) =>
-            {
-                var available = rooms.Where(r => r.currentPlayers < r.maxPlayers && !r.hasPassword).ToList();
-                if (available.Count > 0 && !NetworkClient.isConnected)
-                    manager.JoinRoom(available[0].address, available[0].port);
+                candidates = rooms
+                    .Where(r => !r.hasPassword && r.currentPlayers < r.maxPlayers)
+                    .ToList();
+                searchDone = true;
             });
 
-            yield return new WaitForSeconds(5f);
-            elapsed += 5f;
-        }
+            // Wait for both LAN (3s) and HTTP to finish, up to 6s
+            float waited = 0f;
+            while (!searchDone && waited < 6f && quickMatchActive)
+            {
+                yield return null;
+                waited += Time.deltaTime;
+            }
 
-        // ── Step 4: give up ──────────────────────────────────────────────────
-        quickMatchActive = false;
-        if (!NetworkClient.isConnected)
-        {
-            if (quickMatchStatusText != null)
-                quickMatchStatusText.text = "No matches found. Try creating one!";
-            yield return new WaitForSeconds(3f);
-            ShowScreen(Screen.MainMenu);
+            if (!quickMatchActive) yield break;
+
+            // ── Step 2: Try each candidate ────────────────────────────────────
+            bool joined = false;
+            foreach (var room in candidates)
+            {
+                if (!quickMatchActive || NetworkClient.isConnected) break;
+
+                _quickMatchBaseStatus = $"Joining \"{room.roomName}\"...";
+                _quickMatchJoinFailed = false;
+                manager.JoinRoom(room.address, room.port);
+
+                // Wait until connected, failed, or timed out (12s ≈ KCP connect timeout)
+                float joinWait = 0f;
+                while (NetworkClient.active && !NetworkClient.isConnected
+                       && !_quickMatchJoinFailed && joinWait < 12f && quickMatchActive)
+                {
+                    yield return null;
+                    joinWait += Time.deltaTime;
+                }
+
+                if (NetworkClient.isConnected)
+                {
+                    quickMatchActive = false;
+                    joined = true;
+                    break;
+                }
+
+                // Join failed or timed out — clean up before trying next candidate
+                if (NetworkClient.active)
+                {
+                    NetworkManager.singleton.StopClient();
+                    yield return new WaitForSeconds(0.5f);
+                }
+
+                _quickMatchJoinFailed = false;
+                Debug.Log($"[QuickMatch] Failed to join '{room.roomName}', trying next...");
+            }
+
+            if (joined || NetworkClient.isConnected) yield break;
+            if (!quickMatchActive) yield break;
+
+            // ── Step 3: No valid rooms or all failed — short delay before retry ─
+            _quickMatchBaseStatus = "No matches found. Retrying...";
+
+            float retryWait = 0f;
+            while (retryWait < 5f && quickMatchActive)
+            {
+                yield return null;
+                retryWait += Time.deltaTime;
+            }
         }
     }
 
     private void StopQuickMatchSearch()
     {
         quickMatchActive = false;
+
         if (quickMatchCoroutine != null)
         {
             StopCoroutine(quickMatchCoroutine);
             quickMatchCoroutine = null;
         }
+        if (quickMatchTimerCoroutine != null)
+        {
+            StopCoroutine(quickMatchTimerCoroutine);
+            quickMatchTimerCoroutine = null;
+        }
+
+        // Stop any in-progress connect attempt
+        if (NetworkClient.active && !NetworkClient.isConnected)
+            NetworkManager.singleton.StopClient();
+
         ShowScreen(Screen.MainMenu);
     }
 
@@ -352,32 +436,26 @@ public class LobbyUIController : MonoBehaviour
         if (browserStatusText != null) browserStatusText.text = "Searching for matches...";
         ClearChildren(roomListContent);
 
-        manager.RefreshRoomList((rooms) =>
+        manager.RefreshRoomList(rooms =>
         {
             ClearChildren(roomListContent);
 
-            // Prefer a discovered room at localhost over a hardcoded entry so we get
-            // real data (hasPassword, player count, room name, map).
-            var localDiscovered = rooms.FirstOrDefault(r =>
-                r.address == "127.0.0.1" || r.address == "localhost" || r.address == "::1");
-
-            var remoteRooms = localDiscovered != null
-                ? rooms.Where(r => r.serverId != localDiscovered.serverId).ToList()
-                : rooms;
-
-            int total = remoteRooms.Count + (localDiscovered != null ? 1 : 0);
-
-            if (total == 0)
+            if (rooms.Count == 0)
             {
                 if (browserStatusText != null)
                     browserStatusText.text = "No matches found.";
+                return;
             }
-            else
-            {
-                if (browserStatusText != null) browserStatusText.text = $"Found {total} match(es)";
-                if (localDiscovered != null) CreateRoomEntry(localDiscovered);
-                foreach (var room in remoteRooms) CreateRoomEntry(room);
-            }
+
+            if (browserStatusText != null)
+                browserStatusText.text = $"Found {rooms.Count} match(es)";
+
+            // Show local rooms first, then remote
+            var local  = rooms.Where(r => r.address == "127.0.0.1" || r.address == "::1").ToList();
+            var remote = rooms.Where(r => r.address != "127.0.0.1" && r.address != "::1").ToList();
+
+            foreach (var room in local)  CreateRoomEntry(room);
+            foreach (var room in remote) CreateRoomEntry(room);
         });
     }
 
@@ -389,16 +467,16 @@ public class LobbyUIController : MonoBehaviour
         entry.SetActive(true);
 
         var roomNameText = FindChildTMP(entry, "RoomNameText");
-        var mapText = FindChildTMP(entry, "MapText");
-        var playersText = FindChildTMP(entry, "PlayersText");
-        var lockIcon = FindChildGameObject(entry, "LockIcon");
-        var joinButton = FindChildButton(entry, "JoinButton");
+        var mapText      = FindChildTMP(entry, "MapText");
+        var playersText  = FindChildTMP(entry, "PlayersText");
+        var lockIcon     = FindChildGameObject(entry, "LockIcon");
+        var joinButton   = FindChildButton(entry, "JoinButton");
 
         if (roomNameText != null) roomNameText.text = room.roomName;
-        if (mapText != null) mapText.text = room.mapName;
-        if (playersText != null)
+        if (mapText      != null) mapText.text      = string.IsNullOrEmpty(room.mapName) ? "—" : room.mapName;
+        if (playersText  != null)
             playersText.text = room.maxPlayers > 0 ? $"{room.currentPlayers}/{room.maxPlayers}" : "—";
-        if (lockIcon != null) lockIcon.SetActive(room.hasPassword);
+        if (lockIcon     != null) lockIcon.SetActive(room.hasPassword);
 
         if (joinButton != null)
         {
@@ -414,22 +492,16 @@ public class LobbyUIController : MonoBehaviour
 
     private void TryJoinRoom(DiscoveredRoom room)
     {
-        // Always set pendingRoom so OnJoinFailed("Wrong password.") can retry with the prompt
-        // even if the room wasn't marked as password-protected in the browser.
         pendingRoom = room;
         _passwordWasAttempted = false;
 
         if (room.hasPassword)
-        {
             OpenPasswordPrompt();
-        }
         else
-        {
             manager.JoinRoom(room.address, room.port);
-        }
     }
 
-    // ── Direct Connect (IP-based — LAN direct or internet) ───────────────────
+    // ── Direct Connect (IP-based) ──────────────────────────────────────────────
 
     private void ToggleDirectConnectPanel()
     {
@@ -445,7 +517,6 @@ public class LobbyUIController : MonoBehaviour
         string ip = input;
         int port = 7777;
 
-        // Support "ip:port" format
         int colonIdx = input.LastIndexOf(':');
         if (colonIdx > 0 && int.TryParse(input.Substring(colonIdx + 1), out int parsedPort))
         {
@@ -471,9 +542,9 @@ public class LobbyUIController : MonoBehaviour
         string code = joinByCodeInput.text.Trim().ToUpper();
         if (string.IsNullOrEmpty(code)) return;
 
-        if (browserStatusText != null) browserStatusText.text = $"Searching for room with code {code}...";
+        if (browserStatusText != null) browserStatusText.text = $"Searching for code {code}...";
 
-        manager.RefreshRoomList((rooms) =>
+        manager.RefreshRoomList(rooms =>
         {
             var match = rooms.FirstOrDefault(r => r.roomCode == code);
             if (match != null)
@@ -482,11 +553,8 @@ public class LobbyUIController : MonoBehaviour
             }
             else
             {
-                // Not found on LAN — try localhost (same-machine testing)
-                // Code is trusted since both instances are on the same PC
                 if (browserStatusText != null)
-                    browserStatusText.text = $"Not found on LAN. Trying local connection...";
-                manager.JoinRoom("localhost", 7777);
+                    browserStatusText.text = $"Room with code '{code}' not found.";
             }
         });
     }
@@ -519,13 +587,18 @@ public class LobbyUIController : MonoBehaviour
     {
         Debug.Log($"[LobbyUI] Join failed: {msg}");
 
-        // During QuickMatch, failed attempts are expected — let the coroutine handle flow.
-        if (quickMatchActive) return;
+        // QuickMatch: signal the coroutine that this attempt failed, then let it decide what to do.
+        // We never stop the search from here — only the user can cancel.
+        if (quickMatchActive)
+        {
+            _quickMatchJoinFailed = true;
+            return;
+        }
 
+        // Manual join from browser
         if (msg.Contains("password") || msg.Contains("Password"))
         {
-            // Ensure we're on the browser screen first so the prompt has a panel to appear over.
-            // Something can navigate away during the 1-second server-side delay before rejection.
+            // Return to browser so the password prompt has a backdrop
             ShowScreen(Screen.MatchBrowser);
             bool isRetry = _passwordWasAttempted;
             _passwordWasAttempted = false;
@@ -554,9 +627,9 @@ public class LobbyUIController : MonoBehaviour
         if (matchLobbyPanel == null || !matchLobbyPanel.activeSelf) return;
 
         string displayRoomName = manager.roomName;
-        string displayMap = manager.selectedMap;
-        string displayCode = manager.roomCode;
-        int displayMax = manager.maxConnections;
+        string displayMap      = manager.selectedMap;
+        string displayCode     = manager.roomCode;
+        int    displayMax      = manager.maxConnections;
 
         if (!manager.IsOwner)
         {
@@ -564,15 +637,15 @@ public class LobbyUIController : MonoBehaviour
             if (players.Count > 0)
             {
                 displayRoomName = players[0].syncedRoomName;
-                displayMap = players[0].syncedMapName;
-                displayMax = players[0].syncedMaxPlayers;
-                displayCode = players[0].syncedRoomCode;
+                displayMap      = players[0].syncedMapName;
+                displayMax      = players[0].syncedMaxPlayers;
+                displayCode     = players[0].syncedRoomCode;
             }
         }
 
-        if (lobbyRoomNameText != null) lobbyRoomNameText.text = displayRoomName.ToUpper();
-        if (lobbyRoomCodeText != null) lobbyRoomCodeText.text = $"CODE: {displayCode}";
-        if (lobbyMapText != null) lobbyMapText.text = $"Map: {displayMap}";
+        if (lobbyRoomNameText  != null) lobbyRoomNameText.text  = displayRoomName.ToUpper();
+        if (lobbyRoomCodeText  != null) lobbyRoomCodeText.text  = $"CODE: {displayCode}";
+        if (lobbyMapText       != null) lobbyMapText.text       = $"Map: {displayMap}";
         if (lobbyPlayerCountText != null) lobbyPlayerCountText.text = $"{manager.CurrentPlayerCount}/{displayMax}";
 
         ClearChildren(playerListContent);
@@ -595,7 +668,7 @@ public class LobbyUIController : MonoBehaviour
         GameObject entry = Instantiate(playerEntryPrefab, playerListContent);
         entry.SetActive(true);
 
-        var nameText = FindChildTMP(entry, "NameText");
+        var nameText   = FindChildTMP(entry, "NameText");
         var statusText = FindChildTMP(entry, "StatusText");
         var kickButton = FindChildButton(entry, "KickButton");
 
@@ -603,16 +676,16 @@ public class LobbyUIController : MonoBehaviour
         {
             string display = player.playerName;
             if (player.isRoomOwner) display += " [HOST]";
-            if (player.isOwned) display += " (You)";
+            if (player.isOwned)     display += " (You)";
             nameText.text = display;
         }
 
         if (statusText != null)
         {
             if (player.isRoomOwner)
-            { statusText.text = "HOST"; statusText.color = new Color(1f, 0.85f, 0.3f); }
+            { statusText.text = "HOST";      statusText.color = new Color(1f, 0.85f, 0.3f); }
             else if (player.readyToBegin)
-            { statusText.text = "READY"; statusText.color = new Color(0.2f, 0.8f, 0.4f); }
+            { statusText.text = "READY";     statusText.color = new Color(0.2f, 0.8f, 0.4f); }
             else
             { statusText.text = "NOT READY"; statusText.color = new Color(0.9f, 0.3f, 0.3f); }
         }
@@ -640,7 +713,7 @@ public class LobbyUIController : MonoBehaviour
     // ── Lobby Actions ─────────────────────────────────────────────────────────
 
     private void OnToggleReady() => LobbyPlayer.LocalPlayer?.ToggleReady();
-    private void OnStartGame() => manager.StartGame();
+    private void OnStartGame()   => manager.StartGame();
 
     private void OnLeaveRoom()
     {
