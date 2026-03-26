@@ -116,6 +116,10 @@ public class CarController : NetworkBehaviour
     public override void OnStartServer()
     {
         enabled = true;
+        // Cars spawn AFTER MatchManager.OnStartServer, so FreezeAllPlayers misses them.
+        // Start frozen ourselves if the match hasn't begun yet.
+        if (MatchManager.singleton != null && MatchManager.singleton.State != MatchState.InProgress)
+            _isFrozen = true;
     }
 
     private void Update()

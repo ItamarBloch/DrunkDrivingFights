@@ -357,6 +357,7 @@ GameObject:
   - component: {fileID: -4115152175950394946}
   - component: {fileID: 786781733381093227}
   - component: {fileID: 495324720787028856}
+  - component: {fileID: -7292705457048320891}
   m_Layer: 0
   m_Name: Car
   m_TagString: Untagged
@@ -494,6 +495,7 @@ MonoBehaviour:
   syncMode: 0
   syncInterval: 0
   maxHealth: 100
+  spawnInvulnerabilityTime: 10
   respawnInvulnerabilityTime: 2
 --- !u!114 &3995315270847602963
 MonoBehaviour:
@@ -546,6 +548,8 @@ MonoBehaviour:
   healthFullColor: {r: 0.2, g: 0.9, b: 0.3, a: 1}
   healthLowColor: {r: 0.9, g: 0.2, b: 0.2, a: 1}
   damageFlashDuration: 0.3
+  reloadReadyColor: {r: 0.2, g: 0.9, b: 0.3, a: 1}
+  reloadingColor: {r: 1, g: 0.5, b: 0, a: 1}
 --- !u!114 &786781733381093227
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -590,6 +594,23 @@ MonoBehaviour:
   showReadout: 1
   readoutOffset: {x: 0, y: 20}
   readoutFontSize: 20
+--- !u!114 &-7292705457048320891
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2080996064300763512}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 6227445227eedad4bb4a1f2008e66c9c, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::SpawnShieldEffect
+  syncDirection: 0
+  syncMode: 0
+  syncInterval: 0
+  blinkFrequency: 2
+  visibleFraction: 0.65
 --- !u!1 &2729786574552308341
 GameObject:
   m_ObjectHideFlags: 0
@@ -1636,6 +1657,7 @@ MonoBehaviour:
   maxFOVBoost: 15
   referenceSpeed: 40
   fovSmoothSpeed: 5
+  mouseSensitivity: 0.15
   lockCursor: 1
 --- !u!1 &5722031544901971911
 GameObject:

@@ -83,6 +83,8 @@ public class WeaponController : NetworkBehaviour
     public override void OnStartServer()
     {
         _currentAmmo = weaponSettings != null ? weaponSettings.maxAmmo : 0;
+        if (MatchManager.singleton != null && MatchManager.singleton.State != MatchState.InProgress)
+            _isFrozen = true;
     }
 
     public override void OnStartLocalPlayer()
