@@ -344,8 +344,7 @@ public class GameNetworkRoomManager : NetworkRoomManager
         int index = lobby != null ? roomSlots.ToList().IndexOf(lobby) : conn.connectionId;
         if (index < 0) index = conn.connectionId;
 
-        Vector3 spawnPos = GetSpawnPosition(index);
-        Quaternion spawnRot = Quaternion.Euler(0f, index * 60f, 0f);
+        var (spawnPos, spawnRot) = SpawnPoint.Get(index, maxConnections);
 
         GameObject car = Instantiate(playerPrefab.gameObject, spawnPos, spawnRot);
 
@@ -358,11 +357,12 @@ public class GameNetworkRoomManager : NetworkRoomManager
         return car;
     }
 
-    private Vector3 GetSpawnPosition(int playerIndex)
+    public override void OnRoomServerSceneChanged(string sceneName)
     {
-        float radius = 20f;
-        float angle = playerIndex * (360f / Mathf.Max(maxConnections, 1)) * Mathf.Deg2Rad;
-        return new Vector3(Mathf.Cos(angle) * radius, 1f, Mathf.Sin(angle) * radius);
+        base.OnRoomServerSceneChanged(sceneName);
+        // Randomise spawn order once per match, before any player is spawned.
+        if (sceneName != RoomScene)
+            SpawnPoint.ShuffleForMatch();
     }
 
     // Don't auto-start — owner clicks Start
@@ -388,6 +388,16 @@ public class GameNetworkRoomManager : NetworkRoomManager
     {
         base.OnRoomClientDisconnect();
         Debug.Log("[Lobby] Disconnected from room");
+
+        // If we're in the gameplay scene when the server drops (e.g. host quit mid-match),
+        // the client would be stuck with a dead scene and no camera.
+        // Load the lobby so the player lands somewhere sane.
+        string activeScene = UnityEngine.SceneManagement.SceneManager.GetActiveScene().name;
+        if (activeScene != RoomScene)
+        {
+            Debug.Log("[Lobby] Server disconnected mid-match — returning to lobby");
+            UnityEngine.SceneManagement.SceneManager.LoadScene(RoomScene);
+        }
     }
 
     public override void OnClientError(TransportError error, string reason)
