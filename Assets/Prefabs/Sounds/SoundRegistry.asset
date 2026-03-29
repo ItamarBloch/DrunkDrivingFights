@@ -30,10 +30,18 @@ MonoBehaviour:
     minDistance: 5
     maxDistance: 10
   - key: engine_loop
-    clip: {fileID: 8300000, guid: 4a0a58d0aef1e1e4481004da1f1b2a94, type: 3}
+    clip: {fileID: 8300000, guid: cd0e08abc601d854099218cd61f50fea, type: 3}
     volume: 0.4
     minPitch: 0.6
     maxPitch: 1.4
     spatialBlend: 0.8
     minDistance: 3
     maxDistance: 40
+  - key: hit_impact
+    clip: {fileID: 8300000, guid: 39a8e1235664bb94fb278b4cd9440826, type: 3}
+    volume: 0.2
+    minPitch: 0.6
+    maxPitch: 1.4
+    spatialBlend: 0
+    minDistance: 5
+    maxDistance: 20
