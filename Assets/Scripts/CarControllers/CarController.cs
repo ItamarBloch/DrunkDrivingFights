@@ -63,6 +63,7 @@ public class CarController : NetworkBehaviour
     private CarInputHandler _inputHandler;
     private CarMotor _motor;
     private CarSteering _steering;
+    private CarAirControl _airControl;
     private CarWheelVisuals _wheelVisuals;
     private CarRemoteInterpolator _interpolator;
     private Rigidbody _rb;
@@ -206,6 +207,7 @@ public class CarController : NetworkBehaviour
     private void HostTick()
     {
         _motor.Tick(_localInput);
+        _airControl.Tick(_localInput);
         float steer = _motor.IsDrifting ? _localInput.Steer * settings.driftSteerMultiplier : _localInput.Steer;
         _steering.Tick(steer, _motor.SpeedKmh);
 
@@ -226,6 +228,7 @@ public class CarController : NetworkBehaviour
     private void ServerTick()
     {
         _motor.Tick(_serverInput);
+        _airControl.Tick(_serverInput);
         float steer = _motor.IsDrifting ? _serverInput.Steer * settings.driftSteerMultiplier : _serverInput.Steer;
         _steering.Tick(steer, _motor.SpeedKmh);
 
@@ -268,6 +271,7 @@ public class CarController : NetworkBehaviour
         CmdSendInput(_localInput);
 
         _motor.Tick(_localInput);
+        _airControl.Tick(_localInput);
         float steer = _motor.IsDrifting ? _localInput.Steer * settings.driftSteerMultiplier : _localInput.Steer;
         _steering.Tick(steer, _motor.SpeedKmh);
     }
@@ -333,6 +337,7 @@ public class CarController : NetworkBehaviour
         _inputHandler = GetOrAddComponent<CarInputHandler>();
         _motor = GetOrAddComponent<CarMotor>();
         _steering = GetOrAddComponent<CarSteering>();
+        _airControl = GetOrAddComponent<CarAirControl>();
         _wheelVisuals = GetOrAddComponent<CarWheelVisuals>();
         _interpolator = GetOrAddComponent<CarRemoteInterpolator>();
     }
@@ -341,6 +346,30 @@ public class CarController : NetworkBehaviour
     {
         _rb.centerOfMass = centerOfMassOffset;
         _rb.interpolation = RigidbodyInterpolation.Interpolate;
+        ApplyBodyColliderFriction();
+    }
+
+    /// <summary>
+    /// Makes every non-wheel collider on the car body frictionless so it slides
+    /// over curb edges instead of snagging. WheelColliders handle all traction
+    /// through their own friction curves and are left untouched.
+    /// </summary>
+    private void ApplyBodyColliderFriction()
+    {
+        var mat = new PhysicsMaterial("CarBody_Frictionless")
+        {
+            dynamicFriction = 0f,
+            staticFriction  = 0f,
+            frictionCombine = PhysicsMaterialCombine.Minimum,
+            bounciness      = 0f,
+            bounceCombine   = PhysicsMaterialCombine.Minimum
+        };
+
+        foreach (Collider col in GetComponentsInChildren<Collider>())
+        {
+            if (col is WheelCollider) continue;
+            col.material = mat;
+        }
     }
 
     private void InitializeSubsystems()
@@ -349,6 +378,7 @@ public class CarController : NetworkBehaviour
 
         _motor.Initialize(settings, _rb, frontWheels, rearWheels, allWheels);
         _steering.Initialize(settings, frontWheels);
+        _airControl.Initialize(settings, _rb, allWheels);
         _wheelVisuals.Initialize(allWheels, wheelVisuals);
         _interpolator.Initialize(_rb);
     }
