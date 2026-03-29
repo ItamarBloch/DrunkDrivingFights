@@ -104,6 +104,27 @@ public class CarSettings : ScriptableObject
     [Tooltip("Steering angle multiplier while drifting.")]
     public float driftSteerMultiplier = 1.5f;
 
+    [Header("Aerial Control")]
+    [Tooltip("Pitch torque (rad/s² per unit of throttle input) applied while airborne. " +
+             "W = nose tilts down, S = nose tilts up. Try 5–12.")]
+    public float airPitchTorque = 8f;
+
+    [Tooltip("Roll torque (rad/s² per unit of steer input) applied while airborne. " +
+             "A = rolls left, D = rolls right. Try 4–10.")]
+    public float airRollTorque = 6f;
+
+    [Tooltip("Fraction of angular velocity removed per second while airborne. " +
+             "Prevents runaway spinning. 0 = no damping, 3 = snappy. Try 1–3.")]
+    public float airAngularDamping = 2f;
+
+    [Tooltip("dot(car.up, world.up) below which the car is considered flipped. " +
+             "-0.1 = any tilt past 90°. -0.5 = well past horizontal. Use -0.1 for most cases.")]
+    [Range(-1f, 0f)]
+    public float flipDetectThreshold = -0.1f;
+
+    [Tooltip("Seconds the car must stay flipped before auto-flip triggers.")]
+    public float autoFlipDelay = 3f;
+
     // ── Helpers ──────────────────────────────────────────────
 
     public float MaxForwardSpeedUnits => maxForwardSpeed / 3.6f;
