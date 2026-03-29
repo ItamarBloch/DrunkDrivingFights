@@ -151,6 +151,13 @@ public class Rocket : NetworkBehaviour
     [ClientRpc]
     private void RpcSpawnExplosionVFX(Vector3 position, string vfxKey)
     {
+        // Destroy trail immediately — trail is only for while the rocket is alive
+        if (_trailInstance != null)
+        {
+            Destroy(_trailInstance);
+            _trailInstance = null;
+        }
+
         if (vfxReferences != null && !string.IsNullOrEmpty(vfxKey))
             vfxReferences.SpawnEffect(vfxKey, position, Quaternion.identity);
 

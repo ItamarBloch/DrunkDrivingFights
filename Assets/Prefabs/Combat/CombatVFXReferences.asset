@@ -12,4 +12,13 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: adc11b843ac03c4499f7d5d0b5fbb3b1, type: 3}
   m_Name: CombatVFXReferences
   m_EditorClassIdentifier: Assembly-CSharp::VFXReferences
-  entries: []
+  entries:
+  - key: rocket_explosion
+    prefab: {fileID: 8362119266604800798, guid: 23b54eb8cad66ec409679a1f955bbb3a, type: 3}
+    lifetime: 3
+  - key: rocket_trail
+    prefab: {fileID: 1722250247140862, guid: e74bfe2b7740b8b489e7df43040ef517, type: 3}
+    lifetime: 4
+  - key: muzzle_flash
+    prefab: {fileID: 1743301284569550, guid: 394f1359862baa64a9d7473d041ff1ef, type: 3}
+    lifetime: 0.2
