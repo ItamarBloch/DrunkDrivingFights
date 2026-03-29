@@ -1,5 +1,6 @@
 using UnityEngine;
 using Mirror;
+using System.Collections;
 
 /// <summary>
 /// Networked rocket. Inherits car velocity on spawn, has cruise speed transition.
@@ -31,6 +32,7 @@ public class Rocket : NetworkBehaviour
     private float _lifetimeTimer;
     private float _currentSpeed;
     private GameObject _trailInstance;
+    private AudioSource _whooshSource;
 
     private void Awake()
     {
@@ -128,17 +130,22 @@ public class Rocket : NetworkBehaviour
 
         string vfxKey = _weapon != null ? _weapon.explosionVFXKey : "";
         RpcSpawnExplosionVFX(transform.position, vfxKey);
-        NetworkServer.Destroy(gameObject);
+        StartCoroutine(DestroyNextFrame());
     }
 
     [ClientRpc]
     private void RpcSetupVisuals(string trailKey)
     {
-        if (vfxReferences == null || string.IsNullOrEmpty(trailKey)) return;
-        Transform anchor = trailAnchor != null ? trailAnchor : transform;
-        var entry = vfxReferences.GetEffect(trailKey);
-        if (entry != null)
-            _trailInstance = Instantiate(entry.Value.prefab, anchor.position, anchor.rotation, anchor);
+        if (vfxReferences != null && !string.IsNullOrEmpty(trailKey))
+        {
+            Transform anchor = trailAnchor != null ? trailAnchor : transform;
+            var entry = vfxReferences.GetEffect(trailKey);
+            if (entry != null)
+                _trailInstance = Instantiate(entry.Value.prefab, anchor.position, anchor.rotation, anchor);
+        }
+
+        // Whoosh loop — follows the rocket as it moves
+        _whooshSource = SoundManager.Instance?.PlayAttached("rocket_whoosh", transform, loop: true);
     }
 
     [ClientRpc]
@@ -146,11 +153,34 @@ public class Rocket : NetworkBehaviour
     {
         if (vfxReferences != null && !string.IsNullOrEmpty(vfxKey))
             vfxReferences.SpawnEffect(vfxKey, position, Quaternion.identity);
+
+        // Stop whoosh, play explosion
+        if (_whooshSource != null)
+        {
+            _whooshSource.Stop();
+            Destroy(_whooshSource.gameObject);
+            _whooshSource = null;
+        }
+        SoundManager.Instance?.PlayAtPoint("explosion", position);
+    }
+
+    // Delay destroy by one frame so Mirror has time to deliver the ClientRpc
+    // to the local client on host before the object is gone.
+    private IEnumerator DestroyNextFrame()
+    {
+        yield return null;
+        NetworkServer.Destroy(gameObject);
     }
 
     private void OnDestroy()
     {
         if (_trailInstance != null && _trailInstance.transform.parent != transform)
             Destroy(_trailInstance, 2f);
+
+        if (_whooshSource != null)
+        {
+            _whooshSource.Stop();
+            Destroy(_whooshSource.gameObject);
+        }
     }
 }
