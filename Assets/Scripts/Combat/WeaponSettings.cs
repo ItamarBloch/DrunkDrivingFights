@@ -82,17 +82,6 @@ public class WeaponSettings : ScriptableObject
              "Leave empty for linear falloff.")]
     public AnimationCurve damageFalloff;
 
-    // ── Knockback ───────────────────────────────────────────
-
-    [Header("Knockback")]
-    [Tooltip("Force applied at explosion center. Falls off with distance.")]
-    [Min(0f)]
-    public float knockbackForce = 2000f;
-
-    [Tooltip("Vertical bias for knockback. Higher = launches more upward.")]
-    [Range(0f, 2f)]
-    public float knockbackUpwardBias = 0.4f;
-
     // ── VFX Keys ────────────────────────────────────────────
 
     [Header("VFX Keys (match entries in VFXReferences asset)")]
@@ -118,24 +107,6 @@ public class WeaponSettings : ScriptableObject
             falloff = 1f - t; // Linear
 
         return Mathf.Lerp(minDamage, maxDamage, falloff);
-    }
-
-    /// <summary>
-    /// Calculate knockback magnitude based on distance.
-    /// </summary>
-    public float CalculateKnockback(float distance)
-    {
-        if (distance >= explosionRadius) return 0f;
-
-        float t = Mathf.Clamp01(distance / explosionRadius);
-        float falloff;
-
-        if (damageFalloff != null && damageFalloff.keys.Length >= 2)
-            falloff = damageFalloff.Evaluate(t);
-        else
-            falloff = 1f - t;
-
-        return knockbackForce * falloff;
     }
 
     private void OnValidate()
