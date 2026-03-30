@@ -13,11 +13,6 @@ MonoBehaviour:
   m_Name: MapRegistry
   m_EditorClassIdentifier: Assembly-CSharp::MapRegistry
   maps:
-  - sceneName: SampleScene
-    displayName: TestMap
-    description: TestMap
-    minPlayers: 2
-    maxPlayers: 8
   - sceneName: Map-One-Scene
     displayName: Grassy Field
     description: TestMap

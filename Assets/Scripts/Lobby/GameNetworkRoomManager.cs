@@ -392,11 +392,14 @@ public class GameNetworkRoomManager : NetworkRoomManager
         // If we're in the gameplay scene when the server drops (e.g. host quit mid-match),
         // the client would be stuck with a dead scene and no camera.
         // Load the lobby so the player lands somewhere sane.
+        // RoomScene may be a full path (e.g. "Assets/Scenes/LobbyScene.unity") while
+        // GetActiveScene().name is always just the bare name — strip path/extension to compare.
         string activeScene = UnityEngine.SceneManagement.SceneManager.GetActiveScene().name;
-        if (activeScene != RoomScene)
+        string roomSceneName = System.IO.Path.GetFileNameWithoutExtension(RoomScene);
+        if (activeScene != roomSceneName)
         {
             Debug.Log("[Lobby] Server disconnected mid-match — returning to lobby");
-            UnityEngine.SceneManagement.SceneManager.LoadScene(RoomScene);
+            UnityEngine.SceneManagement.SceneManager.LoadScene(roomSceneName);
         }
     }
 
