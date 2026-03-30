@@ -47,7 +47,7 @@ public class CarAirControl : UnityEngine.MonoBehaviour
             ApplyAirAngularDamping();
         }
 
-        // Auto-flip runs whether in the air or tipped on the ground.
+        // Auto-flip only triggers when grounded and upside-down.
         UpdateFlipTimer();
     }
 
@@ -89,8 +89,25 @@ public class CarAirControl : UnityEngine.MonoBehaviour
 
     // ── Auto-Flip ────────────────────────────────────────────
 
+    /// <summary>
+    /// Returns true if the car is resting on the ground (regardless of orientation).
+    /// Wheels-grounded covers the normal upright case. When upside-down, wheels point up
+    /// so we fall back to a short raycast + near-zero vertical velocity to distinguish
+    /// "resting upside-down" from "airborne but close to the ground".
+    /// </summary>
+    private bool IsRestingOnGround()
+    {
+        if (!IsAirborne) return true;  // wheels touching = definitely grounded
+        bool nearGround = Physics.Raycast(transform.position, Vector3.down, 1.5f);
+        bool notLaunched = Mathf.Abs(_rb.linearVelocity.y) < 2f;
+        return nearGround && notLaunched;
+    }
+
     private void UpdateFlipTimer()
     {
+        // Only auto-flip when resting on the ground — never while airborne.
+        if (!IsRestingOnGround()) { _flippedTimer = 0f; return; }
+
         // dot(car.up, world.up) < threshold means the car is past 90° tilt
         bool isFlipped = Vector3.Dot(transform.up, Vector3.up) < _settings.flipDetectThreshold;
 
