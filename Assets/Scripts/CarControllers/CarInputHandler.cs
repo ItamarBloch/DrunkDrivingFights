@@ -29,9 +29,11 @@ public class CarInputHandler : MonoBehaviour
 
         CurrentInput = new CarInputData
         {
-            Throttle = ReadThrottle(kb),
-            Steer    = ReadSteer(kb),
-            Brake    = ReadBrake(kb)
+            Throttle       = ReadThrottle(kb),
+            Steer          = ReadSteer(kb),
+            Brake          = ReadBrake(kb),
+            AerialThrottle = ReadAerialThrottle(kb),
+            AerialSteer    = ReadAerialSteer(kb)
         };
     }
 
@@ -75,5 +77,27 @@ public class CarInputHandler : MonoBehaviour
     private bool ReadBrake(Keyboard kb)
     {
         return kb.spaceKey.isPressed;
+    }
+
+    /// <summary>
+    /// Aerial pitch — Up/Down arrows only (not W/S).
+    /// </summary>
+    private float ReadAerialThrottle(Keyboard kb)
+    {
+        float value = 0f;
+        if (kb.upArrowKey.isPressed)   value += 1f;
+        if (kb.downArrowKey.isPressed) value -= 1f;
+        return value;
+    }
+
+    /// <summary>
+    /// Aerial roll — Left/Right arrows only (not A/D).
+    /// </summary>
+    private float ReadAerialSteer(Keyboard kb)
+    {
+        float value = 0f;
+        if (kb.rightArrowKey.isPressed) value += 1f;
+        if (kb.leftArrowKey.isPressed)  value -= 1f;
+        return value;
     }
 }

@@ -22,7 +22,7 @@ MonoBehaviour:
   rocketCruiseSpeed: 80
   cruiseTransitionRate: 30
   rocketLifetime: 5
-  rocketGravityScale: 0.1
+  rocketGravityScale: 0
   explosionRadius: 8
   maxDamage: 100
   minDamage: 15
