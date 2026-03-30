@@ -34,6 +34,7 @@ public class LobbyUIController : MonoBehaviour
     // ── QuickMatch Search State ───────────────────────────────────────────────
     [Header("=== QUICKMATCH SEARCH ===")]
     [SerializeField] private TextMeshProUGUI quickMatchStatusText;
+    [SerializeField] private TextMeshProUGUI quickMatchTimerText;
     [SerializeField] private Button quickMatchCancelButton;
 
     // ── Match Browser ─────────────────────────────────────────────────────────
@@ -46,6 +47,7 @@ public class LobbyUIController : MonoBehaviour
     [SerializeField] private GameObject joinByCodePanel;
     [SerializeField] private TMP_InputField joinByCodeInput;
     [SerializeField] private Button joinByCodeConfirmButton;
+    [SerializeField] private Button joinByCodeCloseButton;
     [SerializeField] private GameObject roomEntryPrefab;
 
     // ── Password Prompt ───────────────────────────────────────────────────────
@@ -123,13 +125,17 @@ public class LobbyUIController : MonoBehaviour
         bool inLobby = matchLobbyPanel != null && matchLobbyPanel.activeSelf;
         bool connected = NetworkClient.isConnected;
 
-        if (!inLobby && connected)
-            ShowScreen(Screen.MatchLobby);
-
-        if (inLobby && !connected && !NetworkServer.active)
+        // Don't switch screens while QuickMatch is actively probing connections.
+        if (!quickMatchActive)
         {
-            StopQuickMatchSearch();
-            ShowScreen(Screen.MainMenu);
+            if (!inLobby && connected)
+                ShowScreen(Screen.MatchLobby);
+
+            if (inLobby && !connected && !NetworkServer.active)
+            {
+                StopQuickMatchSearch();
+                ShowScreen(Screen.MainMenu);
+            }
         }
 
         if (inLobby) UpdateReadyButton();
@@ -157,6 +163,9 @@ public class LobbyUIController : MonoBehaviour
             gameModeDropdown.ClearOptions();
             gameModeDropdown.AddOptions(new List<string> { "Last Man Standing" });
         }
+
+        if (passwordCreateInput != null)
+            passwordCreateInput.characterLimit = 10;
     }
 
     private void WireButtons()
@@ -179,6 +188,7 @@ public class LobbyUIController : MonoBehaviour
         backButton_Browser?.onClick.AddListener(() => ShowScreen(Screen.MainMenu));
         joinByCodeButton?.onClick.AddListener(ToggleJoinByCodePanel);
         joinByCodeConfirmButton?.onClick.AddListener(OnJoinByCode);
+        joinByCodeCloseButton?.onClick.AddListener(ToggleJoinByCodePanel);
         directConnectToggleButton?.onClick.AddListener(ToggleDirectConnectPanel);
         directConnectButton?.onClick.AddListener(OnDirectConnect);
 
@@ -224,7 +234,7 @@ public class LobbyUIController : MonoBehaviour
 
     private void ShowScreen(Screen screen)
     {
-        mainMenuPanel?.SetActive(screen == Screen.MainMenu || screen == Screen.QuickMatchSearch);
+        mainMenuPanel?.SetActive(screen == Screen.MainMenu);
         quickMatchSearchPanel?.SetActive(screen == Screen.QuickMatchSearch);
         matchBrowserPanel?.SetActive(screen == Screen.MatchBrowser);
         createMatchPanel?.SetActive(screen == Screen.CreateMatch);
@@ -256,6 +266,7 @@ public class LobbyUIController : MonoBehaviour
         SetPlaySubMenu(false);
         ShowScreen(Screen.QuickMatchSearch);
         if (quickMatchStatusText != null) quickMatchStatusText.text = "Searching for a match...";
+        if (quickMatchTimerText != null) quickMatchTimerText.text = "00:00";
         if (quickMatchCoroutine != null) StopCoroutine(quickMatchCoroutine);
         quickMatchActive = true;
         quickMatchCoroutine = StartCoroutine(QuickMatchCoroutine());
@@ -263,75 +274,68 @@ public class LobbyUIController : MonoBehaviour
 
     private IEnumerator QuickMatchCoroutine()
     {
-        const float totalTimeout = 60f;
+        const float maxTime = 99 * 60f;
         float elapsed = 0f;
+        float nextScanAt = 5f;
+        bool localhostProbed = false;
 
-        // ── Step 1: LAN search (3s) ──────────────────────────────────────────
-        if (quickMatchStatusText != null)
-            quickMatchStatusText.text = "Searching for a match...";
+        // Kick off an immediate LAN scan.
+        manager.RefreshRoomList(TryJoinFromQuickMatch);
 
-        bool lanFound = false;
-        manager.RefreshRoomList((rooms) =>
+        while (quickMatchActive && elapsed < maxTime)
         {
-            var available = rooms.Where(r => r.currentPlayers < r.maxPlayers && !r.hasPassword).ToList();
-            if (available.Count > 0 && !NetworkClient.isConnected)
-            {
-                lanFound = true;
-                manager.JoinRoom(available[0].address, available[0].port);
-            }
-        });
+            yield return new WaitForSeconds(1f);
+            if (!quickMatchActive) yield break;
 
-        // Wait for LAN discovery to finish (3s)
-        yield return new WaitForSeconds(4f);
-        elapsed += 4f;
+            elapsed += 1f;
 
-        if (NetworkClient.isConnected) { quickMatchActive = false; yield break; }
+            // Update MM:SS timer display.
+            int mins = (int)(elapsed / 60f);
+            int secs = (int)(elapsed % 60f);
+            if (quickMatchTimerText != null) quickMatchTimerText.text = $"{mins:00}:{secs:00}";
 
-        // ── Step 2: localhost probe (same-machine testing) ───────────────────
-        // LAN broadcast doesn't reliably loop back on Windows, so same-machine games
-        // won't show up in step 1. We probe localhost directly.
-        // If the game there is password-protected the server rejects us — quickMatchActive
-        // suppresses all UI so the user never sees a prompt. The _pendingAuth guard in
-        // PasswordAuthenticator also prevents any stale rejection messages from firing later.
-        if (!lanFound)
-        {
-            if (quickMatchStatusText != null)
-                quickMatchStatusText.text = "Trying local connection...";
-
-            manager.JoinRoom("localhost", 7777);
-            yield return new WaitForSeconds(3f);
-            elapsed += 3f;
-
+            // Successfully connected — done.
             if (NetworkClient.isConnected) { quickMatchActive = false; yield break; }
-        }
 
-        // ── Step 3: keep scanning LAN until timeout ──────────────────────────
-        while (elapsed < totalTimeout && !NetworkClient.isConnected)
-        {
-            int remaining = Mathf.CeilToInt(totalTimeout - elapsed);
-            if (quickMatchStatusText != null)
-                quickMatchStatusText.text = $"Searching for a match... ({remaining}s)";
-
-            manager.RefreshRoomList((rooms) =>
+            // Localhost probe once at ~4s (LAN broadcast doesn't loop back on Windows).
+            if (!localhostProbed && elapsed >= 4f)
             {
-                var available = rooms.Where(r => r.currentPlayers < r.maxPlayers && !r.hasPassword).ToList();
-                if (available.Count > 0 && !NetworkClient.isConnected)
-                    manager.JoinRoom(available[0].address, available[0].port);
-            });
+                localhostProbed = true;
+                if (quickMatchStatusText != null) quickMatchStatusText.text = "Trying local connection...";
+                manager.JoinRoom("localhost", 7777);
+            }
+            else if (localhostProbed && elapsed >= 7f && quickMatchStatusText != null
+                     && quickMatchStatusText.text != "Searching for a match...")
+            {
+                quickMatchStatusText.text = "Searching for a match...";
+            }
 
-            yield return new WaitForSeconds(5f);
-            elapsed += 5f;
+            // Periodic LAN scan every 5s.
+            if (elapsed >= nextScanAt)
+            {
+                nextScanAt += 5f;
+                manager.RefreshRoomList(TryJoinFromQuickMatch);
+            }
         }
 
-        // ── Step 4: give up ──────────────────────────────────────────────────
+        // Timed out at 99:00 — give up.
         quickMatchActive = false;
         if (!NetworkClient.isConnected)
         {
-            if (quickMatchStatusText != null)
-                quickMatchStatusText.text = "No matches found. Try creating one!";
-            yield return new WaitForSeconds(3f);
+            if (quickMatchStatusText != null) quickMatchStatusText.text = "No matches found. Try creating one!";
+            if (quickMatchTimerText != null) quickMatchTimerText.text = "99:00";
+            yield return new WaitForSeconds(2f);
             ShowScreen(Screen.MainMenu);
         }
+    }
+
+    /// <summary>Callback for QuickMatch LAN scans — joins the first open room found.</summary>
+    private void TryJoinFromQuickMatch(List<DiscoveredRoom> rooms)
+    {
+        if (!quickMatchActive || NetworkClient.isConnected) return;
+        var available = rooms.Where(r => r.currentPlayers < r.maxPlayers && !r.hasPassword).ToList();
+        if (available.Count > 0)
+            manager.JoinRoom(available[0].address, available[0].port);
     }
 
     private void StopQuickMatchSearch()
