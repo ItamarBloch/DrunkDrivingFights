@@ -361,6 +361,7 @@ GameObject:
   - component: {fileID: 4042255116318884709}
   - component: {fileID: 1283739479637717085}
   - component: {fileID: -9212446877912255144}
+  - component: {fileID: 3639480849400796355}
   m_Layer: 0
   m_Name: Car
   m_TagString: Untagged
@@ -663,6 +664,29 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::CarSpawnVFX
   spawnVFXPrefab: {fileID: 3441030658817944741, guid: 3630c2faf43038a42901dff8f799ad86, type: 3}
   heightOffset: -0.5
+--- !u!114 &3639480849400796355
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2080996064300763512}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: b9ac1e89e54ed8249b902b22fda09850, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::CarAudioController
+  syncDirection: 0
+  syncMode: 0
+  syncInterval: 0
+  _maxSpeedKmh: 120
+  _engineIdlePitch: 0.6
+  _engineMaxPitch: 1.4
+  _engineIdleVolume: 0.3
+  _engineMaxVolume: 0.7
+  _engineSmoothing: 5
+  _engineMinDistance: 3
+  _engineMaxDistance: 40
 --- !u!1 &2729786574552308341
 GameObject:
   m_ObjectHideFlags: 0
@@ -2291,7 +2315,7 @@ Transform:
   m_GameObject: {fileID: 8088959443006615620}
   serializedVersion: 2
   m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: 0, y: 0.5, z: 2}
+  m_LocalPosition: {x: 0, y: 0.75, z: 2}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children: []

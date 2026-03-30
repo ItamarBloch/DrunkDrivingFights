@@ -204,10 +204,17 @@ public class CarController : NetworkBehaviour
     //  HOST — Server + Owner on the same machine
     // ════════════════════════════════════════════════════════
 
+    private static CarInputData ToAerialInput(CarInputData src) => new CarInputData
+    {
+        Throttle = src.AerialThrottle,
+        Steer    = src.AerialSteer,
+        Brake    = false
+    };
+
     private void HostTick()
     {
         _motor.Tick(_localInput);
-        _airControl.Tick(_localInput);
+        _airControl.Tick(ToAerialInput(_localInput));
         float steer = _motor.IsDrifting ? _localInput.Steer * settings.driftSteerMultiplier : _localInput.Steer;
         _steering.Tick(steer, _motor.SpeedKmh);
 
@@ -228,7 +235,7 @@ public class CarController : NetworkBehaviour
     private void ServerTick()
     {
         _motor.Tick(_serverInput);
-        _airControl.Tick(_serverInput);
+        _airControl.Tick(ToAerialInput(_serverInput));
         float steer = _motor.IsDrifting ? _serverInput.Steer * settings.driftSteerMultiplier : _serverInput.Steer;
         _steering.Tick(steer, _motor.SpeedKmh);
 
@@ -271,7 +278,7 @@ public class CarController : NetworkBehaviour
         CmdSendInput(_localInput);
 
         _motor.Tick(_localInput);
-        _airControl.Tick(_localInput);
+        _airControl.Tick(ToAerialInput(_localInput));
         float steer = _motor.IsDrifting ? _localInput.Steer * settings.driftSteerMultiplier : _localInput.Steer;
         _steering.Tick(steer, _motor.SpeedKmh);
     }

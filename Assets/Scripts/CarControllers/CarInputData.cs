@@ -16,11 +16,19 @@ public struct CarInputData
     /// <summary>True while the player is holding the brake button.</summary>
     public bool Brake;
 
+    /// <summary>Aerial pitch axis — arrow keys only. Range: -1 to +1.</summary>
+    public float AerialThrottle;
+
+    /// <summary>Aerial roll axis — arrow keys only. Range: -1 to +1.</summary>
+    public float AerialSteer;
+
     public static CarInputData Empty => new CarInputData
     {
-        Throttle = 0f,
-        Steer    = 0f,
-        Brake    = false
+        Throttle       = 0f,
+        Steer          = 0f,
+        Brake          = false,
+        AerialThrottle = 0f,
+        AerialSteer    = 0f
     };
 }
 
@@ -35,15 +43,19 @@ public static class CarInputDataSerializer
         writer.WriteFloat(value.Throttle);
         writer.WriteFloat(value.Steer);
         writer.WriteBool(value.Brake);
+        writer.WriteFloat(value.AerialThrottle);
+        writer.WriteFloat(value.AerialSteer);
     }
 
     public static CarInputData ReadCarInputData(this NetworkReader reader)
     {
         return new CarInputData
         {
-            Throttle = reader.ReadFloat(),
-            Steer    = reader.ReadFloat(),
-            Brake    = reader.ReadBool()
+            Throttle       = reader.ReadFloat(),
+            Steer          = reader.ReadFloat(),
+            Brake          = reader.ReadBool(),
+            AerialThrottle = reader.ReadFloat(),
+            AerialSteer    = reader.ReadFloat()
         };
     }
 }
