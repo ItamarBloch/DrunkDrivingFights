@@ -1536,6 +1536,8 @@ MonoBehaviour:
   State: 0
   WinnerNetId: 0
   CountdownEndTime: 2
+  EnableHitKnockback: 1
+  EnableRecoilKnockback: 1
 --- !u!114 &2098283108
 MonoBehaviour:
   m_ObjectHideFlags: 0

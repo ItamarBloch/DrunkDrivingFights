@@ -251,6 +251,7 @@ public class WeaponController : NetworkBehaviour
             Vector3 vel = _carRigidbody != null ? _carRigidbody.linearVelocity : Vector3.zero;
             rocket.Initialize(weaponSettings, aimDirection, vel, netIdentity.netId);
         }
+
     }
 
     // ── RPCs ────────────────────────────────────────────────

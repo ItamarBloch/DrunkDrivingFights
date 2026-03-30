@@ -3224,6 +3224,8 @@ MonoBehaviour:
   selectedMap: Arena_Desert
   roomCode: 
   roomPassword: 
+  roomEnableHitKnockback: 1
+  roomEnableRecoilKnockback: 0
 --- !u!4 &519545941
 Transform:
   m_ObjectHideFlags: 0
