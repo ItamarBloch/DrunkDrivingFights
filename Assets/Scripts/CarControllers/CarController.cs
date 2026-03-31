@@ -353,6 +353,12 @@ public class CarController : NetworkBehaviour
     {
         _rb.centerOfMass = centerOfMassOffset;
         _rb.interpolation = RigidbodyInterpolation.Interpolate;
+        // Clamp depenetration velocity so colliding with concave surfaces (e.g. ramp underside)
+        // doesn't apply infinite separation impulse and launch the car.
+        _rb.maxDepenetrationVelocity = 2f;
+        // Sweep-test the body collider against static geometry each frame so fast-moving
+        // cars don't tunnel through thin surfaces (e.g. ramp underside) between frames.
+        _rb.collisionDetectionMode = CollisionDetectionMode.Continuous;
         ApplyBodyColliderFriction();
     }
 
