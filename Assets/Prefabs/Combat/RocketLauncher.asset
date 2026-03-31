@@ -24,8 +24,8 @@ MonoBehaviour:
   rocketLifetime: 5
   rocketGravityScale: 0
   explosionRadius: 8
-  maxDamage: 10
-  minDamage: 1
+  maxDamage: 30
+  minDamage: 10
   damageFalloff:
     serializedVersion: 2
     m_Curve:
@@ -50,10 +50,6 @@ MonoBehaviour:
     m_PreInfinity: 2
     m_PostInfinity: 2
     m_RotationOrder: 4
-  knockbackForce: 15
-  knockbackUpwardBias: 0
-  recoilForce: 20
-  recoilUpwardBias: 0
   muzzleFlashVFXKey: rocket_muzzle_flash
   rocketTrailVFXKey: rocket_trail
   explosionVFXKey: rocket_explosion
