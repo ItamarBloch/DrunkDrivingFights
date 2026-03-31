@@ -42,6 +42,12 @@ public class HealthController : NetworkBehaviour, IDamageable
     /// <summary>(killerNetId) — player just died.</summary>
     public event Action<uint> OnDeath;
 
+    /// <summary>
+    /// Server-only. Fired whenever a player successfully deals damage.
+    /// (instigatorNetId, damageDealt)
+    /// </summary>
+    public static event Action<uint, float> OnDamageDealt;
+
     /// <summary>Player was respawned by a game mode.</summary>
     public event Action OnRespawn;
 
@@ -96,7 +102,9 @@ public class HealthController : NetworkBehaviour, IDamageable
         if (!_isAlive || _isInvulnerable || damage <= 0f) return;
 
         _lastDamagedByNetId = instigatorNetId;
+        float actualDamage = Mathf.Min(damage, _currentHealth); // cap to remaining HP
         _currentHealth = Mathf.Max(0f, _currentHealth - damage);
+        if (instigatorNetId != 0) OnDamageDealt?.Invoke(instigatorNetId, actualDamage);
         RpcDamageReceived(damage, damageSource);
 
         if (_currentHealth <= 0f)

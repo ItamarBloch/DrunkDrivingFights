@@ -12,8 +12,6 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 9a75fce3b97adb24bb8c56ec5db1d5f2, type: 3}
   m_Name: DefaultCombatSettings
   m_EditorClassIdentifier: Assembly-CSharp::CombatSettings
-  enableKnockback: 1
-  knockbackMultiplier: 5
   globalDamageMultiplier: 1
   selfDamage: 1
   selfDamageMultiplier: 0.5

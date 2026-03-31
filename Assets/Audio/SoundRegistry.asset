@@ -45,3 +45,19 @@ MonoBehaviour:
     spatialBlend: 0
     minDistance: 5
     maxDistance: 20
+  - key: match_win
+    clip: {fileID: 8300000, guid: 1b0390ee2831b06408565bcdc3839036, type: 3}
+    volume: 0.5
+    minPitch: 0.6
+    maxPitch: 1.4
+    spatialBlend: 1
+    minDistance: 0
+    maxDistance: 0
+  - key: match_lose
+    clip: {fileID: 8300000, guid: 7a3d1223788d9a54e9e4f186f6df58f8, type: 3}
+    volume: 0.5
+    minPitch: 0.6
+    maxPitch: 1.4
+    spatialBlend: 1
+    minDistance: 0
+    maxDistance: 0
