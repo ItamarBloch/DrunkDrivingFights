@@ -28,6 +28,13 @@ public class EndGameScreen : MonoBehaviour
     [Header("Texts")]
     [SerializeField] private TMP_Text resultText;
     [SerializeField] private TMP_Text winnerNameText;
+    [SerializeField] private TMP_Text kdaText;
+
+    [Header("Sounds")]
+    [Tooltip("Key in SoundRegistry for the win jingle.")]
+    [SerializeField] private string winSoundKey  = "match_win";
+    [Tooltip("Key in SoundRegistry for the lose jingle.")]
+    [SerializeField] private string loseSoundKey = "match_lose";
 
     [Header("Buttons")]
     [SerializeField] private Button returnToLobbyButton;
@@ -44,7 +51,8 @@ public class EndGameScreen : MonoBehaviour
         returnToLobbyButton?.onClick.AddListener(OnReturnToLobby);
         quickMatchButton?.onClick.AddListener(OnQuickMatch);
 
-        MatchManager.OnMatchEnded += HandleMatchEnded;
+        MatchManager.OnMatchEnded     += HandleMatchEnded;
+        MatchManager.OnLocalStatsReady += HandleStatsReady;
 
         // The game scene often has no EventSystem (it lived in the lobby scene).
         // Without one, button clicks are never processed — create one if missing.
@@ -63,7 +71,8 @@ public class EndGameScreen : MonoBehaviour
 
     private void OnDestroy()
     {
-        MatchManager.OnMatchEnded -= HandleMatchEnded;
+        MatchManager.OnMatchEnded      -= HandleMatchEnded;
+        MatchManager.OnLocalStatsReady -= HandleStatsReady;
     }
 
     // ════════════════════════════════════════════════════════
@@ -98,6 +107,20 @@ public class EndGameScreen : MonoBehaviour
             winnerNameText.text = winnerNetId == 0
                 ? "It's a draw!"
                 : $"Winner: {PlayerInfo.GetName(winnerNetId)}";
+
+        // Stats will be filled in by HandleStatsReady; show placeholder until it arrives.
+        if (kdaText != null)
+            kdaText.text = "K: -   D: -   DMG: -";
+
+        // Play win or lose sound
+        string soundKey = won ? winSoundKey : loseSoundKey;
+        SoundManager.Instance?.PlayAtPoint(soundKey, Vector3.zero);
+    }
+
+    private void HandleStatsReady(int kills, int deaths, int damageDealt)
+    {
+        if (kdaText != null)
+            kdaText.text = $"K: {kills}   D: {deaths}   DMG: {damageDealt}";
     }
 
     // ════════════════════════════════════════════════════════

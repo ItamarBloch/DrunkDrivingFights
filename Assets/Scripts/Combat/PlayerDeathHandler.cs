@@ -38,6 +38,9 @@ public class PlayerDeathHandler : NetworkBehaviour
             deathPanel.SetActive(false);
     }
 
+    private void OnEnable()  => MatchManager.OnMatchEnded += HandleMatchEnded;
+    private void OnDisable() => MatchManager.OnMatchEnded -= HandleMatchEnded;
+
     private void OnDestroy()
     {
         var health = GetComponent<HealthController>();
@@ -76,5 +79,11 @@ public class PlayerDeathHandler : NetworkBehaviour
             if (deathPanel != null)
                 deathPanel.SetActive(false);
         }
+    }
+
+    private void HandleMatchEnded(uint _)
+    {
+        if (isLocalPlayer && deathPanel != null)
+            deathPanel.SetActive(false);
     }
 }
