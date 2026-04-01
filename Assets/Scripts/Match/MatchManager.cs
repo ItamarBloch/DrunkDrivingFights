@@ -39,6 +39,10 @@ public class MatchManager : NetworkBehaviour
     [Tooltip("Which rule decides the winner. Swap this to change the game mode.")]
     [SerializeField] private WinConditionType winConditionType = WinConditionType.LastManStanding;
 
+    [Header("Combat Settings")]
+    [Tooltip("Assign the shared CombatSettings ScriptableObject. MatchManager will apply per-match overrides here.")]
+    [SerializeField] private CombatSettings combatSettings;
+
     // ── Synced State ─────────────────────────────────────────
 
     [SyncVar] public MatchState State = MatchState.WaitingToStart;
@@ -46,6 +50,9 @@ public class MatchManager : NetworkBehaviour
 
     /// <summary>NetworkTime timestamp when the countdown ends — used by late-joining clients.</summary>
     [SyncVar] public double CountdownEndTime;
+
+    [SyncVar(hook = nameof(OnSelfDamageSync))]   private bool  _syncSelfDamage = true;
+    [SyncVar(hook = nameof(OnRocketDamageSync))] private int   _syncRocketDamage = MatchCreationData.BaselineDamage;
 
     // ── Static Events (fired on ALL clients via RPC) ─────────
 
@@ -90,9 +97,40 @@ public class MatchManager : NetworkBehaviour
 
     public override void OnStartServer()
     {
+        // Apply match creation settings before anything else
+        _syncSelfDamage   = MatchCreationData.SelfDamageEnabled;
+        _syncRocketDamage = MatchCreationData.RocketDamage;
+        ApplyCombatSettings();
+
         _winCondition = CreateWinCondition(winConditionType);
         FreezeAllPlayers(true);
         Invoke(nameof(BeginCountdown), matchStartDelay);
+    }
+
+    public override void OnStartClient()
+    {
+        base.OnStartClient();
+        // Clients apply whatever the server synced (initial state sync may not fire hooks)
+        ApplyCombatSettings();
+    }
+
+    private void ApplyCombatSettings()
+    {
+        if (combatSettings == null) return;
+        combatSettings.selfDamage = _syncSelfDamage;
+        combatSettings.globalDamageMultiplier = _syncRocketDamage / (float)MatchCreationData.BaselineDamage;
+    }
+
+    private void OnSelfDamageSync(bool _, bool newVal)
+    {
+        _syncSelfDamage = newVal;
+        ApplyCombatSettings();
+    }
+
+    private void OnRocketDamageSync(int _, int newVal)
+    {
+        _syncRocketDamage = newVal;
+        ApplyCombatSettings();
     }
 
     // ════════════════════════════════════════════════════════
