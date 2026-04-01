@@ -38,8 +38,8 @@ public class LobbyOptionsPanel : MonoBehaviour
 
     // ── Controls ──────────────────────────────────────────────
     [Header("Controls")]
-    [Tooltip("Parent that holds one row per action. Give it a VerticalLayoutGroup.")]
-    [SerializeField] private Transform           bindingsContainer;
+    [SerializeField] private Transform           bindingsColumnLeft;
+    [SerializeField] private Transform           bindingsColumnRight;
 
     [Tooltip("Row prefab. Needs children named 'ActionNameText' (TMP) and 'KeyBindingsArea' (Transform).")]
     [SerializeField] private GameObject          bindingRowPrefab;
@@ -167,22 +167,28 @@ public class LobbyOptionsPanel : MonoBehaviour
             });
         }
 
-        if (bindingsContainer == null || bindingRowPrefab == null) return;
+        if (bindingRowPrefab == null) return;
 
+        int idx = 0;
         foreach (InputBindingManager.GameAction action in Enum.GetValues(typeof(InputBindingManager.GameAction)))
-            BuildRow(action);
+            BuildRow(action, idx++);
     }
 
     // Stores the key button per action so RefreshRow can update its text
     private readonly Dictionary<InputBindingManager.GameAction, Button> _keyButtons = new();
 
-    private void BuildRow(InputBindingManager.GameAction action)
+    private void BuildRow(InputBindingManager.GameAction action, int idx)
     {
-        int    idx   = (int)action;
-        string label = idx < InputBindingManager.ActionLabels.Length
-            ? InputBindingManager.ActionLabels[idx] : action.ToString();
+        int    actionIdx = (int)action;
+        string label     = actionIdx < InputBindingManager.ActionLabels.Length
+            ? InputBindingManager.ActionLabels[actionIdx] : action.ToString();
 
-        var row = Instantiate(bindingRowPrefab, bindingsContainer);
+        int       total  = Enum.GetValues(typeof(InputBindingManager.GameAction)).Length;
+        int       half   = (total + 1) / 2;
+        Transform column = idx < half ? bindingsColumnLeft : bindingsColumnRight;
+        if (column == null) return;
+
+        var row = Instantiate(bindingRowPrefab, column);
 
         var nameTmp = row.transform.Find("ActionNameText")?.GetComponent<TextMeshProUGUI>();
         if (nameTmp != null) nameTmp.text = label;
