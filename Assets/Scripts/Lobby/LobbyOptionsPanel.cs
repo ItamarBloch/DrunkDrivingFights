@@ -5,43 +5,59 @@ using System;
 using System.Collections.Generic;
 
 /// <summary>
-/// Attach to any object in the Options panel.
-/// Wire up all the UI fields in the Inspector.
+/// Attach to the Options panel object. Wire all fields in the Inspector.
 ///
-/// For key bindings: provide a BindingsContainer (VerticalLayoutGroup) and a BindingTagPrefab.
-/// The prefab needs a Button component and a TextMeshProUGUI child named "Label".
-/// The script generates one row per action inside BindingsContainer automatically.
+/// CONTROLS SECTION — two prefabs required:
+///
+///   BindingRowPrefab — one row per action. Must have two named children:
+///     • "ActionNameText"  — TextMeshProUGUI  — shows the action label (e.g. "Drive Forward")
+///     • "KeyBindingsArea" — any Transform     — key buttons are spawned here (give it a HorizontalLayoutGroup)
+///
+///   KeyButtonPrefab — one button per bound key. Must have:
+///     • Button component on the root
+///     • Any TextMeshProUGUI child — shows the key name (e.g. "W", "Space")
+///
+///   The script spawns rows + key buttons automatically at Start.
+///   Click a key button → press a new key → that binding is replaced.
+///   Click "+" at the end of a row → press a key → new binding added.
 /// </summary>
 public class LobbyOptionsPanel : MonoBehaviour
 {
     // ── Player Identity ───────────────────────────────────────
     [Header("Player Identity")]
-    [SerializeField] private TMP_InputField playerNameInput;
-    [SerializeField] private TextMeshProUGUI nameValidationText;
+    [SerializeField] private TMP_InputField      playerNameInput;
+    [SerializeField] private TextMeshProUGUI     nameValidationText;
 
     // ── Camera ────────────────────────────────────────────────
     [Header("Camera")]
-    [SerializeField] private Slider          horizSensSlider;
-    [SerializeField] private TextMeshProUGUI horizSensValueText;
-    [SerializeField] private Slider          vertSensSlider;
-    [SerializeField] private TextMeshProUGUI vertSensValueText;
-    [SerializeField] private Toggle          invertYToggle;
+    [SerializeField] private Slider              horizSensSlider;
+    [SerializeField] private TextMeshProUGUI     horizSensValueText;
+    [SerializeField] private Slider              vertSensSlider;
+    [SerializeField] private TextMeshProUGUI     vertSensValueText;
+    [SerializeField] private Toggle              invertYToggle;
 
     // ── Controls ──────────────────────────────────────────────
     [Header("Controls")]
-    [Tooltip("A VerticalLayoutGroup parent — one row per action is generated here.")]
-    [SerializeField] private Transform  bindingsContainer;
+    [Tooltip("Parent that holds one row per action. Give it a VerticalLayoutGroup.")]
+    [SerializeField] private Transform           bindingsContainer;
 
-    [Tooltip("Prefab with: Button component + TextMeshProUGUI child named 'Label'.")]
-    [SerializeField] private GameObject bindingTagPrefab;
+    [Tooltip("Row prefab. Needs children named 'ActionNameText' (TMP) and 'KeyBindingsArea' (Transform).")]
+    [SerializeField] private GameObject          bindingRowPrefab;
 
-    [SerializeField] private Button     resetBindingsButton;
+    [Tooltip("Key button prefab. Needs a Button component and any TMP child for the key label.")]
+    [SerializeField] private GameObject          keyButtonPrefab;
 
-    // ── Runtime ───────────────────────────────────────────────
-    private readonly Dictionary<InputBindingManager.GameAction, Transform> _tagContainers = new();
-    private bool   _listeningForKey;
-    private InputBindingManager.GameAction _listeningAction;
-    private TextMeshProUGUI               _listeningAddBtnLabel;
+    [SerializeField] private Button              resetBindingsButton;
+
+    // ── Runtime state ─────────────────────────────────────────
+    private bool                               _listening;
+    private InputBindingManager.GameAction     _listenAction;
+    private Button                             _listenButton;
+
+    // ── Prefs keys ────────────────────────────────────────────
+    public const string PrefHorizSens = "CamHorizSens";
+    public const string PrefVertSens  = "CamVertSens";
+    public const string PrefInvertY   = "CamInvertY";
 
     // ── Lifecycle ─────────────────────────────────────────────
 
@@ -54,7 +70,7 @@ public class LobbyOptionsPanel : MonoBehaviour
 
     private void Update()
     {
-        if (!_listeningForKey) return;
+        if (!_listening) return;
 
         var kb = UnityEngine.InputSystem.Keyboard.current;
         if (kb != null && kb.escapeKey.wasPressedThisFrame) { CancelListen(); return; }
@@ -62,12 +78,13 @@ public class LobbyOptionsPanel : MonoBehaviour
         int code = InputBindingManager.ScanAnyPress();
         if (code == 0) return;
 
-        InputBindingManager.singleton?.AddBinding(_listeningAction, code);
-        RefreshTagsForAction(_listeningAction);
+        // Replace the single binding for this action
+        InputBindingManager.singleton?.SetBindings(_listenAction, new List<int> { code });
+        RefreshRow(_listenAction);
         CancelListen();
     }
 
-    // ── Player Name ────────────────────────────────────────────
+    // ── Player Name ───────────────────────────────────────────
 
     private void InitPlayerName()
     {
@@ -76,7 +93,6 @@ public class LobbyOptionsPanel : MonoBehaviour
         playerNameInput.characterLimit = 12;
         playerNameInput.contentType    = TMP_InputField.ContentType.Alphanumeric;
         playerNameInput.text           = PlayerPrefs.GetString("PlayerName", "");
-
         if (nameValidationText != null) nameValidationText.text = "";
 
         playerNameInput.onEndEdit.AddListener(name =>
@@ -94,7 +110,7 @@ public class LobbyOptionsPanel : MonoBehaviour
         });
     }
 
-    // ── Camera ─────────────────────────────────────────────────
+    // ── Camera ────────────────────────────────────────────────
 
     private void InitCameraSettings()
     {
@@ -104,11 +120,10 @@ public class LobbyOptionsPanel : MonoBehaviour
             horizSensSlider.minValue = 0.05f;
             horizSensSlider.maxValue = 0.50f;
             horizSensSlider.value    = saved;
-            UpdateHorizSensLabel(saved);
-
+            if (horizSensValueText != null) horizSensValueText.text = saved.ToString("F2");
             horizSensSlider.onValueChanged.AddListener(v =>
             {
-                UpdateHorizSensLabel(v);
+                if (horizSensValueText != null) horizSensValueText.text = v.ToString("F2");
                 PlayerPrefs.SetFloat(PrefHorizSens, v);
             });
         }
@@ -119,11 +134,10 @@ public class LobbyOptionsPanel : MonoBehaviour
             vertSensSlider.minValue = 0.05f;
             vertSensSlider.maxValue = 0.50f;
             vertSensSlider.value    = saved;
-            UpdateVertSensLabel(saved);
-
+            if (vertSensValueText != null) vertSensValueText.text = saved.ToString("F2");
             vertSensSlider.onValueChanged.AddListener(v =>
             {
-                UpdateVertSensLabel(v);
+                if (vertSensValueText != null) vertSensValueText.text = v.ToString("F2");
                 PlayerPrefs.SetFloat(PrefVertSens, v);
             });
         }
@@ -139,17 +153,7 @@ public class LobbyOptionsPanel : MonoBehaviour
         }
     }
 
-    private void UpdateHorizSensLabel(float v)
-    {
-        if (horizSensValueText != null) horizSensValueText.text = v.ToString("F2");
-    }
-
-    private void UpdateVertSensLabel(float v)
-    {
-        if (vertSensValueText != null) vertSensValueText.text = v.ToString("F2");
-    }
-
-    // ── Controls ───────────────────────────────────────────────
+    // ── Controls ──────────────────────────────────────────────
 
     private void InitControls()
     {
@@ -159,145 +163,73 @@ public class LobbyOptionsPanel : MonoBehaviour
             {
                 InputBindingManager.singleton?.ResetToDefaults();
                 foreach (InputBindingManager.GameAction a in Enum.GetValues(typeof(InputBindingManager.GameAction)))
-                    RefreshTagsForAction(a);
+                    RefreshRow(a);
             });
         }
 
-        if (bindingsContainer == null) return;
+        if (bindingsContainer == null || bindingRowPrefab == null) return;
 
         foreach (InputBindingManager.GameAction action in Enum.GetValues(typeof(InputBindingManager.GameAction)))
-            BuildActionRow(action);
+            BuildRow(action);
     }
 
-    /// <summary>
-    /// Creates one row inside bindingsContainer for the given action:
-    ///   [Action Label]  [tag] [tag] ... [+ Add]
-    /// Layout is handled by the VerticalLayoutGroup on bindingsContainer.
-    /// </summary>
-    private void BuildActionRow(InputBindingManager.GameAction action)
+    // Stores the key button per action so RefreshRow can update its text
+    private readonly Dictionary<InputBindingManager.GameAction, Button> _keyButtons = new();
+
+    private void BuildRow(InputBindingManager.GameAction action)
     {
-        int idx = (int)action;
+        int    idx   = (int)action;
         string label = idx < InputBindingManager.ActionLabels.Length
-            ? InputBindingManager.ActionLabels[idx]
-            : action.ToString();
+            ? InputBindingManager.ActionLabels[idx] : action.ToString();
 
-        // Row root
-        var row = new GameObject($"Row_{action}");
-        row.transform.SetParent(bindingsContainer, false);
-        var hl = row.AddComponent<HorizontalLayoutGroup>();
-        hl.spacing = 6;
-        hl.childForceExpandHeight = false;
-        hl.childForceExpandWidth  = false;
-        hl.childAlignment         = TextAnchor.MiddleLeft;
-        row.AddComponent<LayoutElement>().preferredHeight = 32;
+        var row = Instantiate(bindingRowPrefab, bindingsContainer);
 
-        // Action name label
-        var nameGO = new GameObject("ActionName");
-        nameGO.transform.SetParent(row.transform, false);
-        var nameTmp = nameGO.AddComponent<TextMeshProUGUI>();
-        nameTmp.text      = label;
-        nameTmp.fontSize  = 13;
-        nameTmp.alignment = TextAlignmentOptions.MidlineLeft;
-        nameGO.AddComponent<LayoutElement>().preferredWidth = 150;
+        var nameTmp = row.transform.Find("ActionNameText")?.GetComponent<TextMeshProUGUI>();
+        if (nameTmp != null) nameTmp.text = label;
 
-        // Tags container
-        var tagsGO = new GameObject("Tags");
-        tagsGO.transform.SetParent(row.transform, false);
-        var tagsHL = tagsGO.AddComponent<HorizontalLayoutGroup>();
-        tagsHL.spacing              = 4;
-        tagsHL.childForceExpandWidth  = false;
-        tagsHL.childForceExpandHeight = false;
-        tagsHL.childAlignment         = TextAnchor.MiddleLeft;
-        var tagsFit = tagsGO.AddComponent<ContentSizeFitter>();
-        tagsFit.horizontalFit = ContentSizeFitter.FitMode.PreferredSize;
-        tagsGO.AddComponent<LayoutElement>().flexibleWidth = 1;
+        var keyArea = row.transform.Find("KeyBindingsArea");
+        if (keyArea == null) return;
 
-        _tagContainers[action] = tagsGO.transform;
+        var btn = Instantiate(keyButtonPrefab, keyArea);
+        var btnComponent = btn.GetComponent<Button>();
+        _keyButtons[action] = btnComponent;
 
-        // "+" Add button
-        var addGO = new GameObject("AddBtn");
-        addGO.transform.SetParent(row.transform, false);
-        var addImg = addGO.AddComponent<Image>();
-        addImg.color = Color.clear;
-        var addBtn = addGO.AddComponent<Button>();
-        addGO.AddComponent<LayoutElement>().preferredWidth = 28;
-
-        var addTxtGO = new GameObject("Label");
-        addTxtGO.transform.SetParent(addGO.transform, false);
-        var addTmp = addTxtGO.AddComponent<TextMeshProUGUI>();
-        addTmp.text      = "+";
-        addTmp.fontSize  = 16;
-        addTmp.alignment = TextAlignmentOptions.Midline;
-        var addRT = addTxtGO.GetComponent<RectTransform>();
-        addRT.anchorMin = Vector2.zero; addRT.anchorMax = Vector2.one;
-        addRT.offsetMin = addRT.offsetMax = Vector2.zero;
-
-        addBtn.onClick.AddListener(() => StartListening(action, addTmp));
-
-        // Fill initial tags
-        RefreshTagsForAction(action);
+        UpdateKeyButtonText(action);
+        btnComponent.onClick.AddListener(() => StartListen(action, btnComponent));
     }
 
-    private void RefreshTagsForAction(InputBindingManager.GameAction action)
+    private void RefreshRow(InputBindingManager.GameAction action)
     {
-        if (!_tagContainers.TryGetValue(action, out var container)) return;
-
-        // Clear old tags
-        for (int i = container.childCount - 1; i >= 0; i--)
-            Destroy(container.GetChild(i).gameObject);
-
-        var bindings = InputBindingManager.singleton?.GetBindings(action)
-                       ?? new List<int>();
-
-        foreach (int code in bindings)
-        {
-            int captured = code;
-
-            if (bindingTagPrefab != null)
-            {
-                var tag = Instantiate(bindingTagPrefab, container);
-                var lbl = tag.transform.Find("Label")?.GetComponent<TextMeshProUGUI>();
-                if (lbl != null) lbl.text = InputBindingManager.CodeDisplayName(code);
-
-                var btn = tag.GetComponent<Button>();
-                if (btn != null)
-                    btn.onClick.AddListener(() =>
-                    {
-                        InputBindingManager.singleton?.RemoveBinding(action, captured);
-                        RefreshTagsForAction(action);
-                    });
-            }
-            else
-            {
-                // Fallback plain text tag (no prefab assigned)
-                var tagGO = new GameObject($"Tag_{code}");
-                tagGO.transform.SetParent(container, false);
-                var tmp = tagGO.AddComponent<TextMeshProUGUI>();
-                tmp.text     = InputBindingManager.CodeDisplayName(code);
-                tmp.fontSize = 12;
-                tagGO.AddComponent<LayoutElement>().preferredWidth = 50;
-            }
-        }
+        UpdateKeyButtonText(action);
     }
 
-    private void StartListening(InputBindingManager.GameAction action, TextMeshProUGUI addBtnLabel)
+    private void UpdateKeyButtonText(InputBindingManager.GameAction action)
     {
-        if (_listeningForKey) { CancelListen(); return; }
-        _listeningForKey     = true;
-        _listeningAction     = action;
-        _listeningAddBtnLabel = addBtnLabel;
-        if (addBtnLabel != null) addBtnLabel.text = "…";
+        if (!_keyButtons.TryGetValue(action, out var btn)) return;
+        var bindings = InputBindingManager.singleton?.GetBindings(action);
+        var tmp = btn.GetComponentInChildren<TextMeshProUGUI>();
+        if (tmp != null)
+            tmp.text = bindings != null && ((IReadOnlyList<int>)bindings).Count > 0
+                ? InputBindingManager.CodeDisplayName(((IReadOnlyList<int>)bindings)[0])
+                : "---";
+    }
+
+    // ── Listen mode ───────────────────────────────────────────
+
+    private void StartListen(InputBindingManager.GameAction action, Button btn)
+    {
+        if (_listening) CancelListen();
+        _listening    = true;
+        _listenAction = action;
+        _listenButton = btn;
+        var tmp = btn.GetComponentInChildren<TextMeshProUGUI>();
+        if (tmp != null) tmp.text = "...";
     }
 
     private void CancelListen()
     {
-        _listeningForKey = false;
-        if (_listeningAddBtnLabel != null) _listeningAddBtnLabel.text = "+";
-        _listeningAddBtnLabel = null;
+        _listening    = false;
+        if (_listenButton != null) UpdateKeyButtonText(_listenAction);
+        _listenButton = null;
     }
-
-    // ── Prefs keys (shared with ThirdPersonCameraController) ──
-    public const string PrefHorizSens = "CamHorizSens";
-    public const string PrefVertSens  = "CamVertSens";
-    public const string PrefInvertY   = "CamInvertY";
 }

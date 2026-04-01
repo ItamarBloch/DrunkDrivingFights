@@ -62,10 +62,10 @@ public class InputBindingManager : MonoBehaviour
 
     private static readonly Dictionary<GameAction, List<int>> Defaults = new()
     {
-        [GameAction.CarThrottleForward] = new() { K(Key.W), K(Key.UpArrow) },
-        [GameAction.CarThrottleBack]    = new() { K(Key.S), K(Key.DownArrow) },
-        [GameAction.CarSteerLeft]       = new() { K(Key.A), K(Key.LeftArrow) },
-        [GameAction.CarSteerRight]      = new() { K(Key.D), K(Key.RightArrow) },
+        [GameAction.CarThrottleForward] = new() { K(Key.W) },
+        [GameAction.CarThrottleBack]    = new() { K(Key.S) },
+        [GameAction.CarSteerLeft]       = new() { K(Key.A) },
+        [GameAction.CarSteerRight]      = new() { K(Key.D) },
         [GameAction.CarBrake]           = new() { K(Key.Space) },
         [GameAction.AerialPitchUp]      = new() { K(Key.UpArrow) },
         [GameAction.AerialPitchDown]    = new() { K(Key.DownArrow) },
