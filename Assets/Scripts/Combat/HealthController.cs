@@ -4,7 +4,7 @@ using System;
 
 /// <summary>
 /// Networked health system. THE EVENT DISPATCHER.
-/// All other scripts subscribe to OnDeath / OnRespawn.
+/// All other scripts subscribe to OnDeath / OnRespawn / OnInvulnerabilityBegan / OnInvulnerabilityEnded.
 /// Does NOT auto-respawn — a future GameModeController calls ForceRespawn().
 /// </summary>
 [RequireComponent(typeof(NetworkIdentity))]
@@ -13,8 +13,9 @@ public class HealthController : NetworkBehaviour, IDamageable
     [Header("Health")]
     [SerializeField] private float maxHealth = 100f;
 
-    [Header("Respawn Protection")]
-    [SerializeField] private float respawnInvulnerabilityTime = 2f;
+    [Header("Spawn / Respawn Protection")]
+    [SerializeField] private float spawnInvulnerabilityTime = 3f;
+    [SerializeField] private float respawnInvulnerabilityTime = 3f;
 
     // ── Networked State ─────────────────────────────────────
 
@@ -27,6 +28,10 @@ public class HealthController : NetworkBehaviour, IDamageable
     [SyncVar]
     private uint _lastDamagedByNetId;
 
+    /// <summary>Synced so all clients can show the spawn-protection visual.</summary>
+    [SyncVar(hook = nameof(OnInvulnSyncHook))]
+    private bool _isInvulnerable;
+
     private float _invulnTimer;
 
     // ── EVENTS — other scripts subscribe to these ───────────
@@ -37,8 +42,20 @@ public class HealthController : NetworkBehaviour, IDamageable
     /// <summary>(killerNetId) — player just died.</summary>
     public event Action<uint> OnDeath;
 
+    /// <summary>
+    /// Server-only. Fired whenever a player successfully deals damage.
+    /// (instigatorNetId, damageDealt)
+    /// </summary>
+    public static event Action<uint, float> OnDamageDealt;
+
     /// <summary>Player was respawned by a game mode.</summary>
     public event Action OnRespawn;
+
+    /// <summary>Invulnerability just became active — fired on ALL clients.</summary>
+    public event Action OnInvulnerabilityBegan;
+
+    /// <summary>Invulnerability just expired — fired on ALL clients.</summary>
+    public event Action OnInvulnerabilityEnded;
 
     // ── IDamageable ─────────────────────────────────────────
 
@@ -46,7 +63,7 @@ public class HealthController : NetworkBehaviour, IDamageable
     public float HealthRatio => maxHealth > 0f ? _currentHealth / maxHealth : 0f;
     public float CurrentHealth => _currentHealth;
     public float MaxHealth => maxHealth;
-    public bool IsInvulnerable => _invulnTimer > 0f;
+    public bool IsInvulnerable => _isInvulnerable;
     public uint LastDamagedByNetId => _lastDamagedByNetId;
 
     // ── Lifecycle ───────────────────────────────────────────
@@ -55,6 +72,7 @@ public class HealthController : NetworkBehaviour, IDamageable
     {
         _currentHealth = maxHealth;
         _isAlive = true;
+        BeginInvulnerability(spawnInvulnerabilityTime);
     }
 
     public override void OnStartClient()
@@ -66,7 +84,14 @@ public class HealthController : NetworkBehaviour, IDamageable
     {
         if (!isServer) return;
         if (_invulnTimer > 0f)
+        {
             _invulnTimer -= Time.deltaTime;
+            if (_invulnTimer <= 0f)
+            {
+                _invulnTimer = 0f;
+                _isInvulnerable = false; // SyncVar — hook fires on all clients
+            }
+        }
     }
 
     // ── Damage (Server Only) ────────────────────────────────
@@ -74,10 +99,12 @@ public class HealthController : NetworkBehaviour, IDamageable
     [Server]
     public void TakeDamage(float damage, uint instigatorNetId, Vector3 damageSource)
     {
-        if (!_isAlive || _invulnTimer > 0f || damage <= 0f) return;
+        if (!_isAlive || _isInvulnerable || damage <= 0f) return;
 
         _lastDamagedByNetId = instigatorNetId;
+        float actualDamage = Mathf.Min(damage, _currentHealth); // cap to remaining HP
         _currentHealth = Mathf.Max(0f, _currentHealth - damage);
+        if (instigatorNetId != 0) OnDamageDealt?.Invoke(instigatorNetId, actualDamage);
         RpcDamageReceived(damage, damageSource);
 
         if (_currentHealth <= 0f)
@@ -98,6 +125,8 @@ public class HealthController : NetworkBehaviour, IDamageable
     private void Die()
     {
         _isAlive = false;
+        _isInvulnerable = false;
+        _invulnTimer = 0f;
         RpcOnDeath(_lastDamagedByNetId);
     }
 
@@ -110,13 +139,31 @@ public class HealthController : NetworkBehaviour, IDamageable
     {
         _currentHealth = maxHealth;
         _isAlive = true;
-        _invulnTimer = respawnInvulnerabilityTime;
+        BeginInvulnerability(respawnInvulnerabilityTime);
         RpcOnRespawn();
     }
 
-    // ── SyncVar Hook ────────────────────────────────────────
+    // ── Invulnerability (Server Only) ───────────────────────
+
+    [Server]
+    private void BeginInvulnerability(float duration)
+    {
+        if (duration <= 0f) return;
+        _invulnTimer = duration;
+        _isInvulnerable = true; // SyncVar — hook fires on all clients
+    }
+
+    // ── SyncVar Hooks ────────────────────────────────────────
 
     private void OnHealthSyncHook(float oldVal, float newVal) { }
+
+    private void OnInvulnSyncHook(bool oldVal, bool newVal)
+    {
+        if (newVal)
+            OnInvulnerabilityBegan?.Invoke();
+        else
+            OnInvulnerabilityEnded?.Invoke();
+    }
 
     // ── RPCs — these fire the events on ALL clients ─────────
 

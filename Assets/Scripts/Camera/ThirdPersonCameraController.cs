@@ -257,14 +257,7 @@ public class ThirdPersonCameraController : NetworkBehaviour
     {
         if (!isLocalPlayer || playerCamera == null) return;
 
-        // Cursor toggle
-        if (UnityEngine.InputSystem.Keyboard.current != null
-            && UnityEngine.InputSystem.Keyboard.current.escapeKey.wasPressedThisFrame)
-        {
-            bool isLocked = Cursor.lockState == CursorLockMode.Locked;
-            Cursor.lockState = isLocked ? CursorLockMode.None : CursorLockMode.Locked;
-            Cursor.visible = isLocked;
-        }
+        // ESC is handled by InGameOptionsPanel — do not toggle cursor here.
 
         // Mouse orbit — driven manually so it works in every multiplayer instance
         if (orbitalFollow != null && Cursor.lockState == CursorLockMode.Locked)
@@ -275,10 +268,16 @@ public class ThirdPersonCameraController : NetworkBehaviour
                 // Look-back (middle mouse button) — GTA:SA style
                 _lookBack = mouse.middleButton.isPressed;
 
+                // Read per-player camera settings from PlayerPrefs
+                float horizSens = PlayerPrefs.GetFloat(LobbyOptionsPanel.PrefHorizSens, mouseSensitivity);
+                float vertSens  = PlayerPrefs.GetFloat(LobbyOptionsPanel.PrefVertSens,  mouseSensitivity);
+                bool  invertY   = PlayerPrefs.GetInt(LobbyOptionsPanel.PrefInvertY, 0) == 1;
+
                 // Normal orbit input (always accumulate into the base values)
                 Vector2 delta = mouse.delta.ReadValue();
-                _hValue += delta.x * mouseSensitivity;
-                _vValue -= delta.y * mouseSensitivity;
+                _hValue += delta.x * horizSens;
+                float vertDelta = delta.y * vertSens * (invertY ? 1f : -1f);
+                _vValue += vertDelta;
                 _vValue  = Mathf.Clamp(_vValue, minVerticalAngle, maxVerticalAngle);
 
                 // Apply to Cinemachine: add 180° offset when looking back

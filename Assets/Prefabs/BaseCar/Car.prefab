@@ -142,7 +142,7 @@ GameObject:
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
-  m_IsActive: 0
+  m_IsActive: 1
 --- !u!224 &7466117350605965686
 RectTransform:
   m_ObjectHideFlags: 0
@@ -185,7 +185,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: UnityEngine.UI::UnityEngine.UI.Image
   m_Material: {fileID: 0}
-  m_Color: {r: 0.5566038, g: 0.5566038, b: 0.5566038, a: 0.392}
+  m_Color: {r: 0, g: 0, b: 0, a: 0.78431374}
   m_RaycastTarget: 1
   m_RaycastPadding: {x: 0, y: 0, z: 0, w: 0}
   m_Maskable: 1
@@ -236,8 +236,8 @@ RectTransform:
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
   m_AnchorMin: {x: 0.5, y: 1}
   m_AnchorMax: {x: 0.5, y: 1}
-  m_AnchoredPosition: {x: 0, y: -25}
-  m_SizeDelta: {x: 200, y: 50}
+  m_AnchoredPosition: {x: 0, y: -120}
+  m_SizeDelta: {x: 400, y: 80}
   m_Pivot: {x: 0.5, y: 0.5}
 --- !u!222 &1766604501502900593
 CanvasRenderer:
@@ -269,15 +269,15 @@ MonoBehaviour:
       m_Calls: []
   m_text: You Died
   m_isRightToLeft: 0
-  m_fontAsset: {fileID: 11400000, guid: 8f586378b4e144a9851e7b34d9b748ee, type: 2}
-  m_sharedMaterial: {fileID: 2180264, guid: 8f586378b4e144a9851e7b34d9b748ee, type: 2}
+  m_fontAsset: {fileID: 11400000, guid: dc36b3fdc14f47ebb36fd484a67e268a, type: 2}
+  m_sharedMaterial: {fileID: 2140032, guid: dc36b3fdc14f47ebb36fd484a67e268a, type: 2}
   m_fontSharedMaterials: []
   m_fontMaterial: {fileID: 0}
   m_fontMaterials: []
   m_fontColor32:
     serializedVersion: 2
-    rgba: 4294967295
-  m_fontColor: {r: 1, g: 1, b: 1, a: 1}
+    rgba: 4278190335
+  m_fontColor: {r: 1, g: 0, b: 0, a: 1}
   m_enableVertexGradient: 0
   m_colorMode: 3
   m_fontColorGradient:
@@ -294,15 +294,15 @@ MonoBehaviour:
   m_faceColor:
     serializedVersion: 2
     rgba: 4294967295
-  m_fontSize: 36
-  m_fontSizeBase: 36
+  m_fontSize: 72
+  m_fontSizeBase: 72
   m_fontWeight: 400
   m_enableAutoSizing: 0
   m_fontSizeMin: 18
   m_fontSizeMax: 72
   m_fontStyle: 0
-  m_HorizontalAlignment: 1
-  m_VerticalAlignment: 256
+  m_HorizontalAlignment: 2
+  m_VerticalAlignment: 512
   m_textAlignment: 65535
   m_characterSpacing: 0
   m_characterHorizontalScale: 1
@@ -357,6 +357,11 @@ GameObject:
   - component: {fileID: -4115152175950394946}
   - component: {fileID: 786781733381093227}
   - component: {fileID: 495324720787028856}
+  - component: {fileID: -7292705457048320891}
+  - component: {fileID: 4042255116318884709}
+  - component: {fileID: 1283739479637717085}
+  - component: {fileID: -9212446877912255144}
+  - component: {fileID: 3639480849400796355}
   m_Layer: 0
   m_Name: Car
   m_TagString: Untagged
@@ -494,6 +499,7 @@ MonoBehaviour:
   syncMode: 0
   syncInterval: 0
   maxHealth: 100
+  spawnInvulnerabilityTime: 10
   respawnInvulnerabilityTime: 2
 --- !u!114 &3995315270847602963
 MonoBehaviour:
@@ -546,6 +552,8 @@ MonoBehaviour:
   healthFullColor: {r: 0.2, g: 0.9, b: 0.3, a: 1}
   healthLowColor: {r: 0.9, g: 0.2, b: 0.2, a: 1}
   damageFlashDuration: 0.3
+  reloadReadyColor: {r: 0.2, g: 0.9, b: 0.3, a: 1}
+  reloadingColor: {r: 1, g: 0.5, b: 0, a: 1}
 --- !u!114 &786781733381093227
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -590,6 +598,95 @@ MonoBehaviour:
   showReadout: 1
   readoutOffset: {x: 0, y: 20}
   readoutFontSize: 20
+--- !u!114 &-7292705457048320891
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2080996064300763512}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 6227445227eedad4bb4a1f2008e66c9c, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::SpawnShieldEffect
+  syncDirection: 0
+  syncMode: 0
+  syncInterval: 0
+  blinkFrequency: 2
+  visibleFraction: 0.65
+--- !u!114 &4042255116318884709
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2080996064300763512}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 44a406ee90d0ac64ea7f9cd72bf419b4, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::CarEngineSmoke
+  smokePrefab: {fileID: 7051656906722882706, guid: 25cef73765df56a43aba20440026ed49, type: 3}
+  exhaustLocalPosition: {x: 0, y: 0, z: -2.4}
+  minSpeedKmh: 8
+  minEmissionRate: 10
+  maxEmissionRate: 25
+--- !u!114 &1283739479637717085
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2080996064300763512}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 9b4bb6da3dcbd184ca2d644e8d7929c7, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::CarWheelVFX
+  skidMaterial: {fileID: 2100000, guid: e117ddf89f9b7dc4d8ad3f65a2ca39ea, type: 2}
+  trailWidth: 1
+  trailFadeTime: 4
+  sidewaysSlipThreshold: 0.1
+  brakeSlipThreshold: -0.1
+  driftSmokePrefab: {fileID: 6417502989630816037, guid: cb402f96cbce61d40b430fe5c0ef83eb, type: 3}
+--- !u!114 &-9212446877912255144
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2080996064300763512}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 11928f37431e91d41a101bf482ef93aa, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::CarSpawnVFX
+  spawnVFXPrefab: {fileID: 3441030658817944741, guid: 3630c2faf43038a42901dff8f799ad86, type: 3}
+  heightOffset: -0.5
+--- !u!114 &3639480849400796355
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2080996064300763512}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: b9ac1e89e54ed8249b902b22fda09850, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::CarAudioController
+  syncDirection: 0
+  syncMode: 0
+  syncInterval: 0
+  _maxSpeedKmh: 120
+  _engineIdlePitch: 0.6
+  _engineMaxPitch: 1.4
+  _engineIdleVolume: 0.3
+  _engineMaxVolume: 0.7
+  _engineSmoothing: 5
+  _engineMinDistance: 3
+  _engineMaxDistance: 40
 --- !u!1 &2729786574552308341
 GameObject:
   m_ObjectHideFlags: 0
@@ -1300,10 +1397,10 @@ RectTransform:
   m_Children: []
   m_Father: {fileID: 7466117350605965686}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
-  m_AnchorMin: {x: 1, y: 1}
-  m_AnchorMax: {x: 1, y: 1}
-  m_AnchoredPosition: {x: -100, y: -25}
-  m_SizeDelta: {x: 200, y: 50}
+  m_AnchorMin: {x: 0.5, y: 1}
+  m_AnchorMax: {x: 0.5, y: 1}
+  m_AnchoredPosition: {x: 0, y: -250}
+  m_SizeDelta: {x: 1000, y: 120}
   m_Pivot: {x: 0.5, y: 0.5}
 --- !u!222 &6304818010374415842
 CanvasRenderer:
@@ -1360,8 +1457,8 @@ MonoBehaviour:
   m_faceColor:
     serializedVersion: 2
     rgba: 4294967295
-  m_fontSize: 36
-  m_fontSizeBase: 36
+  m_fontSize: 48
+  m_fontSizeBase: 48
   m_fontWeight: 400
   m_enableAutoSizing: 0
   m_fontSizeMin: 18
@@ -1636,6 +1733,7 @@ MonoBehaviour:
   maxFOVBoost: 15
   referenceSpeed: 40
   fovSmoothSpeed: 5
+  mouseSensitivity: 0.15
   lockCursor: 1
 --- !u!1 &5722031544901971911
 GameObject:
@@ -2217,7 +2315,7 @@ Transform:
   m_GameObject: {fileID: 8088959443006615620}
   serializedVersion: 2
   m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: 0, y: 1.1, z: 1.5}
+  m_LocalPosition: {x: 0, y: 0.75, z: 2}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children: []

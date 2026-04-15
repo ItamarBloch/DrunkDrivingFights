@@ -48,6 +48,9 @@ public class WeaponController : NetworkBehaviour
     private InputAction _fireAction;
     private InputAction _reloadAction;
 
+    // Used when InputBindingManager is available (overrides _fireAction / _reloadAction)
+    private bool _useBindingManager;
+
     // ── Events ──────────────────────────────────────────────
 
     public event Action<int, int> OnAmmoChanged;
@@ -83,12 +86,18 @@ public class WeaponController : NetworkBehaviour
     public override void OnStartServer()
     {
         _currentAmmo = weaponSettings != null ? weaponSettings.maxAmmo : 0;
+        if (MatchManager.singleton != null && MatchManager.singleton.State != MatchState.InProgress)
+            _isFrozen = true;
     }
 
     public override void OnStartLocalPlayer()
     {
-        _fireAction.Enable();
-        _reloadAction.Enable();
+        _useBindingManager = InputBindingManager.singleton != null;
+        if (!_useBindingManager)
+        {
+            _fireAction.Enable();
+            _reloadAction.Enable();
+        }
 
         if (muzzlePoint == null)
         {
@@ -172,17 +181,19 @@ public class WeaponController : NetworkBehaviour
     {
         if (weaponSettings == null || _isDead || _isFrozen) return;
 
-        if (_fireAction.WasPerformedThisFrame())
-        {
-            if (_currentAmmo > 0 && !_isReloading)
-                CmdFire(GetAimDirection());
-        }
+        bool firePressed   = _useBindingManager
+            ? InputBindingManager.singleton.WasPressedThisFrame(InputBindingManager.GameAction.WeaponFire)
+            : _fireAction.WasPerformedThisFrame();
 
-        if (_reloadAction.WasPerformedThisFrame())
-        {
-            if (_currentAmmo < weaponSettings.maxAmmo && !_isReloading)
-                CmdReload();
-        }
+        bool reloadPressed = _useBindingManager
+            ? InputBindingManager.singleton.WasPressedThisFrame(InputBindingManager.GameAction.WeaponReload)
+            : _reloadAction.WasPerformedThisFrame();
+
+        if (firePressed && _currentAmmo > 0 && !_isReloading)
+            CmdFire(GetAimDirection());
+
+        if (reloadPressed && _currentAmmo < weaponSettings.maxAmmo && !_isReloading)
+            CmdReload();
     }
 
     private Vector3 GetAimDirection()
@@ -249,6 +260,7 @@ public class WeaponController : NetworkBehaviour
             Vector3 vel = _carRigidbody != null ? _carRigidbody.linearVelocity : Vector3.zero;
             rocket.Initialize(weaponSettings, aimDirection, vel, netIdentity.netId);
         }
+
     }
 
     // ── RPCs ────────────────────────────────────────────────

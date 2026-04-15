@@ -269,6 +269,7 @@ public class CarMotor : MonoBehaviour
 
     private void ApplyCounterThrust()
     {
+        if (!IsGrounded) return;
         Vector3 opposing = -_rb.linearVelocity.normalized * _settings.counterThrustForce;
         _rb.AddForce(opposing, ForceMode.Acceleration);
     }
@@ -320,6 +321,7 @@ public class CarMotor : MonoBehaviour
     /// </summary>
     private void ApplyYawDamping(float steerInput, bool isDrifting)
     {
+        if (!IsGrounded) return;
         float yaw = Vector3.Dot(_rb.angularVelocity, transform.up);
 
         if (isDrifting)
@@ -386,7 +388,9 @@ public class CarMotor : MonoBehaviour
 
     private void ApplyDownforce()
     {
+        if (!IsGrounded) return;
         float force = _settings.downforceCoefficient * _rb.linearVelocity.magnitude;
-        _rb.AddForce(-transform.up * force, ForceMode.Force);
+        // Always push toward world down so a tilted car isn't pushed sideways.
+        _rb.AddForce(Vector3.down * force, ForceMode.Force);
     }
 }

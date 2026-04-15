@@ -4,7 +4,9 @@
       "WebSearch",
       "WebFetch(domain:github.com)",
       "WebFetch(domain:www.youtube.com)",
-      "WebFetch(domain:supabase.com)"
+      "WebFetch(domain:supabase.com)",
+      "WebFetch(domain:discussions.unity.com)",
+      "WebFetch(domain:docs.unity3d.com)"
     ]
   }
 }

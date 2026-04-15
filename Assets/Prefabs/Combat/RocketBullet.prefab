@@ -151,6 +151,7 @@ MonoBehaviour:
   syncInterval: 0
   combatSettings: {fileID: 11400000, guid: 00b620958a9ef1242af5cde6b2697715, type: 2}
   vfxReferences: {fileID: 11400000, guid: 08d5ab4b0bcd7f64f87f50bacbc14e31, type: 2}
+  soundRegistry: {fileID: 11400000, guid: a55d8b052540b5d4b9d608e3fb0ffd23, type: 2}
   trailAnchor: {fileID: 6436972122260176070}
 --- !u!114 &9199086900276762849
 MonoBehaviour:

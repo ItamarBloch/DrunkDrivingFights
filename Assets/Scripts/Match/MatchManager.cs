@@ -39,6 +39,10 @@ public class MatchManager : NetworkBehaviour
     [Tooltip("Which rule decides the winner. Swap this to change the game mode.")]
     [SerializeField] private WinConditionType winConditionType = WinConditionType.LastManStanding;
 
+    [Header("Combat Settings")]
+    [Tooltip("Assign the shared CombatSettings ScriptableObject. MatchManager will apply per-match overrides here.")]
+    [SerializeField] private CombatSettings combatSettings;
+
     // ── Synced State ─────────────────────────────────────────
 
     [SyncVar] public MatchState State = MatchState.WaitingToStart;
@@ -46,6 +50,9 @@ public class MatchManager : NetworkBehaviour
 
     /// <summary>NetworkTime timestamp when the countdown ends — used by late-joining clients.</summary>
     [SyncVar] public double CountdownEndTime;
+
+    [SyncVar(hook = nameof(OnSelfDamageSync))]   private bool  _syncSelfDamage = true;
+    [SyncVar(hook = nameof(OnRocketDamageSync))] private int   _syncRocketDamage = MatchCreationData.BaselineDamage;
 
     // ── Static Events (fired on ALL clients via RPC) ─────────
 
@@ -58,10 +65,19 @@ public class MatchManager : NetworkBehaviour
     /// <summary>Match is over. uint = winner netId (0 = draw).</summary>
     public static event Action<uint> OnMatchEnded;
 
+    /// <summary>
+    /// Fired on each client individually with that player's own match stats.
+    /// Arrives shortly after OnMatchEnded (same connection, ordered).
+    /// </summary>
+    public static event Action<int, int, int> OnLocalStatsReady; // (kills, deaths, damageDealt)
+
     // ── Private ──────────────────────────────────────────────
 
     private IWinCondition _winCondition;
     private readonly Dictionary<uint, PlayerMatchData> _players = new();
+    private readonly Dictionary<uint, int>   _kills       = new();
+    private readonly Dictionary<uint, int>   _deaths      = new();
+    private readonly Dictionary<uint, float> _damageDealt = new();
 
     // ════════════════════════════════════════════════════════
     //  LIFECYCLE
@@ -81,9 +97,40 @@ public class MatchManager : NetworkBehaviour
 
     public override void OnStartServer()
     {
+        // Apply match creation settings before anything else
+        _syncSelfDamage   = MatchCreationData.SelfDamageEnabled;
+        _syncRocketDamage = MatchCreationData.RocketDamage;
+        ApplyCombatSettings();
+
         _winCondition = CreateWinCondition(winConditionType);
         FreezeAllPlayers(true);
         Invoke(nameof(BeginCountdown), matchStartDelay);
+    }
+
+    public override void OnStartClient()
+    {
+        base.OnStartClient();
+        // Clients apply whatever the server synced (initial state sync may not fire hooks)
+        ApplyCombatSettings();
+    }
+
+    private void ApplyCombatSettings()
+    {
+        if (combatSettings == null) return;
+        combatSettings.selfDamage = _syncSelfDamage;
+        combatSettings.globalDamageMultiplier = _syncRocketDamage / (float)MatchCreationData.BaselineDamage;
+    }
+
+    private void OnSelfDamageSync(bool _, bool newVal)
+    {
+        _syncSelfDamage = newVal;
+        ApplyCombatSettings();
+    }
+
+    private void OnRocketDamageSync(int _, int newVal)
+    {
+        _syncRocketDamage = newVal;
+        ApplyCombatSettings();
     }
 
     // ════════════════════════════════════════════════════════
@@ -116,6 +163,7 @@ public class MatchManager : NetworkBehaviour
         State = MatchState.InProgress;
         FreezeAllPlayers(false);
         PlayerDeathHandler.OnPlayerDied += HandlePlayerDied;
+        HealthController.OnDamageDealt  += HandleDamageDealt;
         RpcMatchBegan();
     }
 
@@ -128,6 +176,11 @@ public class MatchManager : NetworkBehaviour
         var data = _players[deadNetId];
         data.IsAlive = false;
         _players[deadNetId] = data;
+
+        // Track KDA
+        _deaths[deadNetId] = _deaths.TryGetValue(deadNetId, out var d) ? d + 1 : 1;
+        if (killerNetId != 0 && killerNetId != deadNetId)
+            _kills[killerNetId] = _kills.TryGetValue(killerNetId, out var k) ? k + 1 : 1;
 
         WinResult result = _winCondition.Evaluate(GetPlayerList());
         if (result.IsMatchOver)
@@ -144,11 +197,30 @@ public class MatchManager : NetworkBehaviour
 
         FreezeAllPlayers(true);
         PlayerDeathHandler.OnPlayerDied -= HandlePlayerDied;
+        HealthController.OnDamageDealt  -= HandleDamageDealt;
 
         RpcMatchEnded(winnerNetId);
 
+        // Send each client their own match stats
+        foreach (var conn in NetworkServer.connections.Values)
+        {
+            if (conn?.identity == null) continue;
+            uint netId = conn.identity.netId;
+            int k   = _kills.TryGetValue(netId, out var kv) ? kv : 0;
+            int d   = _deaths.TryGetValue(netId, out var dv) ? dv : 0;
+            int dmg = Mathf.RoundToInt(_damageDealt.TryGetValue(netId, out var dmgv) ? dmgv : 0f);
+            TargetSendStats(conn, k, d, dmg);
+        }
+
         Debug.Log($"[MatchManager] Match ended. Winner netId={winnerNetId} " +
                   $"({(winnerNetId == 0 ? "Draw" : PlayerInfo.GetName(winnerNetId))})");
+    }
+
+    [Server]
+    private void HandleDamageDealt(uint instigatorNetId, float damage)
+    {
+        if (State != MatchState.InProgress) return;
+        _damageDealt[instigatorNetId] = (_damageDealt.TryGetValue(instigatorNetId, out var v) ? v : 0f) + damage;
     }
 
     // ── Called by GameNetworkRoomManager when a client disconnects mid-match ──
@@ -168,6 +240,9 @@ public class MatchManager : NetworkBehaviour
     private void RegisterAllPlayers()
     {
         _players.Clear();
+        _kills.Clear();
+        _deaths.Clear();
+        _damageDealt.Clear();
         foreach (var health in FindObjectsByType<HealthController>(FindObjectsSortMode.None))
         {
             var identity = health.GetComponent<NetworkIdentity>();
@@ -202,6 +277,10 @@ public class MatchManager : NetworkBehaviour
     // ════════════════════════════════════════════════════════
     //  RPCs — broadcast events to all clients
     // ════════════════════════════════════════════════════════
+
+    [TargetRpc]
+    private void TargetSendStats(NetworkConnectionToClient target, int kills, int deaths, int damageDealt)
+        => OnLocalStatsReady?.Invoke(kills, deaths, damageDealt);
 
     [ClientRpc]
     private void RpcCountdownBegan(float duration)

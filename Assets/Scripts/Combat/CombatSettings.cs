@@ -7,14 +7,6 @@ using UnityEngine;
 [CreateAssetMenu(fileName = "CombatSettings", menuName = "Combat/Combat Settings")]
 public class CombatSettings : ScriptableObject
 {
-    [Header("Knockback")]
-    [Tooltip("Master toggle — when false, explosions deal damage but apply zero force.")]
-    public bool enableKnockback = false;
-
-    [Tooltip("Global multiplier on top of per-weapon knockback force.")]
-    [Range(0f, 5f)]
-    public float knockbackMultiplier = 1f;
-
     [Header("Damage")]
     [Tooltip("Global damage multiplier. 2 = double damage mode, etc.")]
     [Range(0.1f, 5f)]
