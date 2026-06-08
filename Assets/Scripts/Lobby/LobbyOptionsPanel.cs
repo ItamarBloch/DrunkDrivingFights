@@ -118,7 +118,7 @@ public class LobbyOptionsPanel : MonoBehaviour
         {
             float saved = PlayerPrefs.GetFloat(PrefHorizSens, 0.15f);
             horizSensSlider.minValue = 0.05f;
-            horizSensSlider.maxValue = 0.50f;
+            horizSensSlider.maxValue = 1f;
             horizSensSlider.value    = saved;
             if (horizSensValueText != null) horizSensValueText.text = saved.ToString("F2");
             horizSensSlider.onValueChanged.AddListener(v =>
@@ -132,7 +132,7 @@ public class LobbyOptionsPanel : MonoBehaviour
         {
             float saved = PlayerPrefs.GetFloat(PrefVertSens, 0.15f);
             vertSensSlider.minValue = 0.05f;
-            vertSensSlider.maxValue = 0.50f;
+            vertSensSlider.maxValue = 1f;
             vertSensSlider.value    = saved;
             if (vertSensValueText != null) vertSensValueText.text = saved.ToString("F2");
             vertSensSlider.onValueChanged.AddListener(v =>
