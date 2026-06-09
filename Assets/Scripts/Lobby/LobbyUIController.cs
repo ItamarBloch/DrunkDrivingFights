@@ -486,11 +486,14 @@ public class LobbyUIController : MonoBehaviour
             }
             else
             {
-                // Not found on LAN — try localhost (same-machine testing)
-                // Code is trusted since both instances are on the same PC
+                #if UNITY_EDITOR
                 if (browserStatusText != null)
                     browserStatusText.text = $"Not found on LAN. Trying local connection...";
                 manager.JoinRoom("localhost", 7777);
+                #else
+                if (browserStatusText != null)
+                    browserStatusText.text = $"No room found with code {code}.";
+                #endif
             }
         });
     }
