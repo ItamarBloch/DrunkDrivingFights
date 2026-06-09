@@ -84,6 +84,17 @@ public class CarSettings : ScriptableObject
     [Tooltip("Maximum yaw rate (rad/s) allowed during drift. Prevents spinout. ~1.5–2.5 rad/s.")]
     public float maxDriftYawRate = 2f;
 
+    [Header("Slope Limits")]
+    [Tooltip("Slope angle (degrees) below which full torque is applied.")]
+    public float slopeFullTorqueAngle = 40f;
+
+    [Tooltip("Slope angle (degrees) above which minimum torque is applied.")]
+    public float slopeMinTorqueAngle = 70f;
+
+    [Tooltip("Torque multiplier at slopeMinTorqueAngle and above. 0.1 = 10% power.")]
+    [Range(0f, 1f)]
+    public float slopeMinTorqueMultiplier = 0.1f;
+
     [Header("Downforce")]
     [Tooltip("Additional downward force per unit of speed.")]
     public float downforceCoefficient = 2.5f;

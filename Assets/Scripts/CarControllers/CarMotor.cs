@@ -33,6 +33,9 @@ public class CarMotor : MonoBehaviour
     /// <summary>True while the car is actively drifting.</summary>
     public bool IsDrifting { get; private set; }
 
+    /// <summary>Current ground slope angle in degrees (0 = flat, 90 = vertical wall).</summary>
+    public float SlopeAngle { get; private set; }
+
     // ── Private State ───────────────────────────────────────
 
     private float _localForwardSpeed;
@@ -202,11 +205,41 @@ public class CarMotor : MonoBehaviour
     private void UpdateGroundedState()
     {
         bool grounded = true;
+        Vector3 normalSum = Vector3.zero;
+        int hitCount = 0;
+
+        for (int i = 0; i < _allWheels.Length; i++)
+        {
+            if (_allWheels[i].GetGroundHit(out WheelHit hit))
+            {
+                normalSum += hit.normal;
+                hitCount++;
+            }
+        }
+
         for (int i = 0; i < _driveWheels.Length; i++)
         {
             if (!_driveWheels[i].isGrounded) { grounded = false; break; }
         }
         IsGrounded = grounded;
+
+        if (hitCount > 0)
+            SlopeAngle = Vector3.Angle(normalSum / hitCount, Vector3.up);
+        else
+            SlopeAngle = 0f;
+    }
+
+    private float GetSlopeTorqueMultiplier()
+    {
+        if (SlopeAngle <= _settings.slopeFullTorqueAngle)
+            return 1f;
+
+        if (SlopeAngle >= _settings.slopeMinTorqueAngle)
+            return _settings.slopeMinTorqueMultiplier;
+
+        float t = (SlopeAngle - _settings.slopeFullTorqueAngle)
+                / (_settings.slopeMinTorqueAngle - _settings.slopeFullTorqueAngle);
+        return Mathf.Lerp(1f, _settings.slopeMinTorqueMultiplier, t);
     }
 
     // ── Motor Torque ────────────────────────────────────────
@@ -216,7 +249,8 @@ public class CarMotor : MonoBehaviour
         if (!CanAccelerate(throttle)) { ClearMotorTorque(); return; }
 
         float curveMod       = _settings.torqueCurve.Evaluate(SpeedRatio);
-        float torquePerWheel = (_settings.motorTorque * throttle * curveMod) / _driveWheels.Length;
+        float slopeMod       = GetSlopeTorqueMultiplier();
+        float torquePerWheel = (_settings.motorTorque * throttle * curveMod * slopeMod) / _driveWheels.Length;
 
         for (int i = 0; i < _driveWheels.Length; i++)
             _driveWheels[i].motorTorque = torquePerWheel;
@@ -278,7 +312,7 @@ public class CarMotor : MonoBehaviour
     {
         if (!IsGrounded || Mathf.Abs(SpeedKmh) >= _settings.launchBoostMaxSpeed) return;
         Vector3 dir = throttle > 0f ? transform.forward : -transform.forward;
-        _rb.AddForce(dir * _settings.launchBoostForce, ForceMode.Acceleration);
+        _rb.AddForce(dir * (_settings.launchBoostForce * GetSlopeTorqueMultiplier()), ForceMode.Acceleration);
     }
 
     /// <summary>
@@ -289,11 +323,9 @@ public class CarMotor : MonoBehaviour
     private void ApplyDirectDriveForce(float throttle)
     {
         if (!IsGrounded) return;
-        // Apply constant push until the speed cap — don't taper, just cut off at max.
-        // CanAccelerate() in ApplyMotorTorque already guards the ceiling.
         if (throttle > 0f && SpeedKmh >= _settings.maxForwardSpeed)  return;
         if (throttle < 0f && SpeedKmh <= -_settings.maxReverseSpeed) return;
-        _rb.AddForce(transform.forward * (throttle * _settings.directDriveForce), ForceMode.Acceleration);
+        _rb.AddForce(transform.forward * (throttle * _settings.directDriveForce * GetSlopeTorqueMultiplier()), ForceMode.Acceleration);
     }
 
     // ── Lateral Damping & Yaw Control ───────────────────────
