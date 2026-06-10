@@ -32,10 +32,16 @@ public static class ExplosionHelper
 
             Vector3 closestPoint = col.ClosestPoint(explosionCenter);
             float distance = Vector3.Distance(explosionCenter, closestPoint);
+            Debug.Log("[ExplosionHelper] distance: " + distance);
 
             float damage = weapon.CalculateDamage(distance);
+            Debug.Log("[ExplosionHelper] Damage Before Multipliers: " + damage);
+
             damage *= combat.globalDamageMultiplier;
+
+
             if (isSelf) damage *= combat.selfDamageMultiplier;
+            Debug.Log("[ExplosionHelper] Damage After Multipliers: " + damage);
             if (damage > 0f) damageable.TakeDamage(damage, instigatorNetId, explosionCenter);
         }
     }
