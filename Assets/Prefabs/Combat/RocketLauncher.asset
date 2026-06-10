@@ -24,7 +24,7 @@ MonoBehaviour:
   rocketLifetime: 5
   rocketGravityScale: 0
   explosionRadius: 8
-  maxDamage: 30
+  maxDamage: 50
   minDamage: 10
   damageFalloff:
     serializedVersion: 2
@@ -32,17 +32,17 @@ MonoBehaviour:
     - serializedVersion: 3
       time: 0
       value: 1
-      inSlope: -1
-      outSlope: -1
+      inSlope: -0.9976196
+      outSlope: -0.9976196
       tangentMode: 34
       weightedMode: 0
       inWeight: 0
       outWeight: 0.33333334
     - serializedVersion: 3
       time: 1
-      value: 0
-      inSlope: -1
-      outSlope: -1
+      value: 0.002380371
+      inSlope: -0.9976196
+      outSlope: -0.9976196
       tangentMode: 34
       weightedMode: 0
       inWeight: 0.33333334
