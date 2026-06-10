@@ -5,6 +5,7 @@ using Unity.Collections;
 using Unity.Networking.Transport;
 using Unity.Networking.Transport.Relay;
 using Mirror;
+using UNetConn = Unity.Networking.Transport.NetworkConnection;
 
 public class RelayTransport : Transport
 {
@@ -17,13 +18,13 @@ public class RelayTransport : Transport
 
     // Server
     private bool _serverActive;
-    private readonly Dictionary<int, NetworkConnection> _idToConn = new();
-    private readonly Dictionary<NetworkConnection, int> _connToId = new();
+    private readonly Dictionary<int, UNetConn> _idToConn = new();
+    private readonly Dictionary<UNetConn, int> _connToId = new();
     private int _nextId = 1;
     private readonly List<int> _pendingDisconnects = new();
 
     // Client
-    private NetworkConnection _clientConn;
+    private UNetConn _clientConn;
     private bool _clientConnected;
 
     public void ConfigureAsHost(RelayServerData data)
@@ -180,7 +181,7 @@ public class RelayTransport : Transport
         _isConfigured = false;
     }
 
-    private void Send(NetworkConnection conn, ArraySegment<byte> segment, int channelId)
+    private void Send(UNetConn conn, ArraySegment<byte> segment, int channelId)
     {
         if (!_driver.IsCreated || !conn.IsCreated) return;
 
@@ -220,7 +221,7 @@ public class RelayTransport : Transport
 
     private void ProcessServerEvents()
     {
-        NetworkConnection incoming;
+        UNetConn incoming;
         while ((incoming = _driver.Accept()) != default)
         {
             int mirrorId = _nextId++;
