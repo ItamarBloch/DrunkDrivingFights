@@ -47,6 +47,7 @@ const sessions = new Map();
  * @property {boolean} hasPassword
  * @property {string} roomCode
  * @property {number} port
+ * @property {string} relayJoinCode  - Unity Relay join code (empty if LAN-only)
  * @property {number} serverId       - mirrors Mirror's discovery serverId (long → JS number)
  * @property {number} lastHeartbeat  - Date.now() timestamp
  */
@@ -137,6 +138,7 @@ async function handleRegister(req, res) {
         hasPassword:    Boolean(body.hasPassword),
         roomCode:       String(body.roomCode        || ''),
         port:           Number(body.port)           || 7777,
+        relayJoinCode:  String(body.relayJoinCode   || ''),
         serverId:       Date.now(),   // unique enough for deduplication
         lastHeartbeat:  Date.now(),
     };
@@ -166,6 +168,7 @@ function handleList(req, res) {
             hasPassword:    s.hasPassword,
             roomCode:       s.roomCode,
             port:           s.port,
+            relayJoinCode:  s.relayJoinCode,
             serverId:       s.serverId,
         });
     }

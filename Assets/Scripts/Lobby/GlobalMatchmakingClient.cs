@@ -58,7 +58,8 @@ public class GlobalMatchmakingClient : MonoBehaviour
     /// Call this after StartHost() succeeds.
     /// </summary>
     public void RegisterSession(string roomName, int maxPlayers, string mapName,
-        bool hasPassword, string roomCode, int port, Action<bool> callback = null)
+        bool hasPassword, string roomCode, int port, string relayJoinCode = null,
+        Action<bool> callback = null)
     {
         if (!IsConfigured)
         {
@@ -68,7 +69,7 @@ public class GlobalMatchmakingClient : MonoBehaviour
         }
 
         StartCoroutine(DoRegisterSession(roomName, maxPlayers, mapName,
-            hasPassword, roomCode, port, callback));
+            hasPassword, roomCode, port, relayJoinCode, callback));
     }
 
     /// <summary>
@@ -129,7 +130,8 @@ public class GlobalMatchmakingClient : MonoBehaviour
     // ── Coroutines ────────────────────────────────────────────────────────────
 
     private IEnumerator DoRegisterSession(string roomName, int maxPlayers, string mapName,
-        bool hasPassword, string roomCode, int port, Action<bool> callback)
+        bool hasPassword, string roomCode, int port, string relayJoinCode,
+        Action<bool> callback)
     {
         var body = new SessionRegisterRequest
         {
@@ -139,7 +141,8 @@ public class GlobalMatchmakingClient : MonoBehaviour
             mapName = mapName,
             hasPassword = hasPassword,
             roomCode = roomCode,
-            port = port
+            port = port,
+            relayJoinCode = relayJoinCode ?? ""
         };
 
         string json = JsonUtility.ToJson(body);
@@ -249,16 +252,17 @@ public class GlobalMatchmakingClient : MonoBehaviour
             {
                 rooms.Add(new DiscoveredRoom
                 {
-                    roomName    = s.roomName,
-                    address     = s.address,
-                    port        = s.port,
+                    roomName       = s.roomName,
+                    address        = s.address,
+                    port           = s.port,
                     currentPlayers = s.currentPlayers,
-                    maxPlayers  = s.maxPlayers,
-                    mapName     = s.mapName,
-                    serverId    = s.serverId,
-                    lastSeen    = DateTime.Now,
-                    hasPassword = s.hasPassword,
-                    roomCode    = s.roomCode
+                    maxPlayers     = s.maxPlayers,
+                    mapName        = s.mapName,
+                    serverId       = s.serverId,
+                    lastSeen       = DateTime.Now,
+                    hasPassword    = s.hasPassword,
+                    roomCode       = s.roomCode,
+                    relayJoinCode  = s.relayJoinCode
                 });
             }
         }
@@ -280,6 +284,7 @@ internal class SessionRegisterRequest
     public bool   hasPassword;
     public string roomCode;
     public int    port;
+    public string relayJoinCode;
 }
 
 [Serializable]
@@ -315,6 +320,7 @@ internal class GlobalSessionData
     public string roomCode;
     public int    port;
     public long   serverId;
+    public string relayJoinCode;
 }
 
 [Serializable]

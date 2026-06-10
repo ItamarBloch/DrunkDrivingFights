@@ -21,6 +21,7 @@ public class DiscoveredRoom
     public bool hasPassword;
     public int passwordHash;
     public string roomCode;
+    public string relayJoinCode;
 }
 
 public struct RoomDiscoveryRequest : NetworkMessage

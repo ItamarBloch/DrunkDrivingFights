@@ -401,7 +401,13 @@ public class LobbyUIController : MonoBehaviour
         if (!quickMatchActive || NetworkClient.isConnected) return;
         var available = rooms.Where(r => r.currentPlayers < r.maxPlayers && !r.hasPassword).ToList();
         if (available.Count > 0)
-            manager.JoinRoom(available[0].address, available[0].port);
+        {
+            var room = available[0];
+            if (!string.IsNullOrEmpty(room.relayJoinCode))
+                manager.JoinRoomViaRelay(room.relayJoinCode);
+            else
+                manager.JoinRoom(room.address, room.port);
+        }
     }
 
     private void StopQuickMatchSearch()
@@ -494,6 +500,8 @@ public class LobbyUIController : MonoBehaviour
 
         if (room.hasPassword)
             OpenPasswordPrompt();
+        else if (!string.IsNullOrEmpty(room.relayJoinCode))
+            manager.JoinRoomViaRelay(room.relayJoinCode);
         else
             manager.JoinRoom(room.address, room.port);
     }
@@ -577,7 +585,11 @@ public class LobbyUIController : MonoBehaviour
         string pwd = passwordPromptInput != null ? passwordPromptInput.text : "";
         _passwordWasAttempted = true;
         ClosePasswordPrompt();
-        manager.JoinRoom(pendingRoom.address, pendingRoom.port, pwd);
+
+        if (!string.IsNullOrEmpty(pendingRoom.relayJoinCode))
+            manager.JoinRoomViaRelay(pendingRoom.relayJoinCode, pwd);
+        else
+            manager.JoinRoom(pendingRoom.address, pendingRoom.port, pwd);
     }
 
     private void OnJoinFailed(string msg)

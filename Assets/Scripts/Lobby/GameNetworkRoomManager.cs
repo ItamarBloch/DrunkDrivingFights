@@ -4,6 +4,8 @@ using Mirror;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using Unity.Networking.Transport.Relay;
+using Unity.Services.Relay.Models;
 
 public class GameNetworkRoomManager : NetworkRoomManager
 {
@@ -24,6 +26,10 @@ public class GameNetworkRoomManager : NetworkRoomManager
     private GameRoomDiscovery discovery;
     private PasswordAuthenticator passwordAuthenticator;
     private GlobalMatchmakingClient globalClient;
+    private kcp2k.KcpTransport kcpTransport;
+    private RelayTransport relayTransport;
+
+    private string _pendingRelayJoinCode;
 
     // Events for UI
     public event Action OnLobbyPlayersUpdated;
@@ -65,14 +71,18 @@ public class GameNetworkRoomManager : NetworkRoomManager
         DontDestroyOnLoad(gameObject);
 
         // Transport — required before base.Awake
+        kcpTransport = GetComponent<kcp2k.KcpTransport>();
+        if (kcpTransport == null)
+            kcpTransport = gameObject.AddComponent<kcp2k.KcpTransport>();
         if (Transport.active == null)
         {
-            var kcp = GetComponent<kcp2k.KcpTransport>();
-            if (kcp == null)
-                kcp = gameObject.AddComponent<kcp2k.KcpTransport>();
-            Transport.active = kcp;
-            transport = kcp;
+            Transport.active = kcpTransport;
+            transport = kcpTransport;
         }
+
+        relayTransport = GetComponent<RelayTransport>();
+        if (relayTransport == null)
+            relayTransport = gameObject.AddComponent<RelayTransport>();
 
         // Discovery — LAN broadcast
         discovery = GetComponent<GameRoomDiscovery>();
@@ -124,7 +134,7 @@ public class GameNetworkRoomManager : NetworkRoomManager
     /// <summary>
     /// Create a room using a map index from the MapRegistry.
     /// </summary>
-    public void CreateRoom(string name, int maxPlayers, int mapIndex, string password = "")
+    public async void CreateRoom(string name, int maxPlayers, int mapIndex, string password = "")
     {
         MapData map = mapRegistry.GetMap(mapIndex);
         if (map == null)
@@ -139,11 +149,32 @@ public class GameNetworkRoomManager : NetworkRoomManager
         GameplayScene = map.sceneName;
         roomPassword = password;
         roomCode = GenerateRoomCode();
+        _pendingRelayJoinCode = null;
 
         if (passwordAuthenticator != null)
             passwordAuthenticator.clientPasswordHash = string.IsNullOrEmpty(password) ? 0 : password.GetHashCode();
 
         Debug.Log($"[Lobby] Creating room '{roomName}' | Map: {map.displayName} | Code: {roomCode} | Max: {maxConnections} | Password: {(string.IsNullOrEmpty(password) ? "none" : "set")}");
+
+        if (globalClient != null && globalClient.IsConfigured)
+        {
+            try
+            {
+                await RelayManager.InitializeAsync();
+                var (allocation, joinCode) = await RelayManager.AllocateRelayAsync(maxConnections);
+                _pendingRelayJoinCode = joinCode;
+                relayTransport.ConfigureAsHost(new RelayServerData(allocation, "dtls"));
+                Transport.active = relayTransport;
+                transport = relayTransport;
+                Debug.Log($"[Lobby] Relay allocated — join code: {joinCode}");
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning($"[Lobby] Relay failed, falling back to LAN-only: {e.Message}");
+                _pendingRelayJoinCode = null;
+                RestoreKcpTransport();
+            }
+        }
 
         try
         {
@@ -154,6 +185,7 @@ public class GameNetworkRoomManager : NetworkRoomManager
         {
             Debug.LogWarning($"[Lobby] Cannot host — port already in use: {e.Message}");
             OnJoinFailed?.Invoke("Port already in use. A game is already running on this machine.");
+            RestoreKcpTransport();
         }
     }
 
@@ -171,15 +203,43 @@ public class GameNetworkRoomManager : NetworkRoomManager
 
     public void JoinRoom(string address, int port = 7777, string password = "")
     {
+        RestoreKcpTransport();
+
         if (passwordAuthenticator != null)
             passwordAuthenticator.clientPasswordHash = string.IsNullOrEmpty(password) ? 0 : password.GetHashCode();
 
         networkAddress = address;
-        if (Transport.active is kcp2k.KcpTransport kcpTransport)
-            kcpTransport.port = (ushort)port;
+        if (Transport.active is kcp2k.KcpTransport kcp)
+            kcp.port = (ushort)port;
 
         Debug.Log($"[Lobby] Joining room at {address}:{port}");
         StartClient();
+    }
+
+    public async void JoinRoomViaRelay(string relayJoinCode, string password = "")
+    {
+        try
+        {
+            await RelayManager.InitializeAsync();
+            var joinAllocation = await RelayManager.JoinRelayAsync(relayJoinCode);
+
+            relayTransport.ConfigureAsClient(new RelayServerData(joinAllocation, "dtls"));
+            Transport.active = relayTransport;
+            transport = relayTransport;
+
+            if (passwordAuthenticator != null)
+                passwordAuthenticator.clientPasswordHash = string.IsNullOrEmpty(password) ? 0 : password.GetHashCode();
+
+            networkAddress = "relay";
+            Debug.Log($"[Lobby] Joining room via relay (code: {relayJoinCode})");
+            StartClient();
+        }
+        catch (Exception e)
+        {
+            Debug.LogWarning($"[Lobby] Relay join failed: {e.Message}");
+            RestoreKcpTransport();
+            OnJoinFailed?.Invoke("Failed to connect via relay. The room may have closed.");
+        }
     }
 
     /// <summary>Called by PasswordAuthenticator when the server rejects a connection.</summary>
@@ -211,6 +271,7 @@ public class GameNetworkRoomManager : NetworkRoomManager
         {
             StopClient();
         }
+        RestoreKcpTransport();
     }
 
     /// <summary>
@@ -229,6 +290,7 @@ public class GameNetworkRoomManager : NetworkRoomManager
         else
         {
             StopClient();
+            RestoreKcpTransport();
             SceneManager.LoadScene("LobbyScene");
         }
     }
@@ -260,10 +322,10 @@ public class GameNetworkRoomManager : NetworkRoomManager
         discovery?.AdvertiseRoom(roomName, maxConnections, selectedMap,
             hasPassword, HashPassword(roomPassword), roomCode);
 
-        // Global: register with the central matchmaking server
+        // Global: register with the central matchmaking server (includes relay join code)
         globalClient?.RegisterSession(
             roomName, maxConnections, selectedMap,
-            hasPassword, roomCode, port,
+            hasPassword, roomCode, port, _pendingRelayJoinCode,
             success => Debug.Log(success
                 ? "[Lobby] Globally registered"
                 : "[Lobby] Global registration failed — room is LAN-only"));
@@ -459,5 +521,12 @@ public class GameNetworkRoomManager : NetworkRoomManager
         if (Transport.active is kcp2k.KcpTransport kcp)
             return kcp.port;
         return 7777;
+    }
+
+    private void RestoreKcpTransport()
+    {
+        if (kcpTransport == null) return;
+        Transport.active = kcpTransport;
+        transport = kcpTransport;
     }
 }
