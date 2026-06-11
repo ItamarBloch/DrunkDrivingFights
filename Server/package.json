@@ -1,0 +1,15 @@
+{
+  "name": "drunkdrivingfights-matchmaking",
+  "version": "1.0.0",
+  "description": "Global matchmaking server for DrunkDrivingFights",
+  "main": "matchmaking-server.js",
+  "scripts": {
+    "start": "node matchmaking-server.js",
+    "dev": "node --watch matchmaking-server.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "keywords": ["matchmaking", "unity", "mirror", "game-server"],
+  "license": "MIT"
+}

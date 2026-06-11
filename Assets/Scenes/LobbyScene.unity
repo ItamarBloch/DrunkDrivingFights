@@ -4833,6 +4833,7 @@ GameObject:
   - component: {fileID: 519545941}
   - component: {fileID: 519545940}
   - component: {fileID: 519545942}
+  - component: {fileID: 519545943}
   m_Layer: 0
   m_Name: GameNetworkRoomManager
   m_TagString: Untagged
@@ -4926,6 +4927,21 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: d48a2151eb64ce647a2e852340a65fd6, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::InputBindingManager
+--- !u!114 &519545943
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 519545939}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: d0fb449fae3090f40a28f1899a9d03ec, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::GlobalMatchmakingClient
+  serverUrl: https://drunkdrivingfights.onrender.com
+  heartbeatInterval: 20
+  requestTimeout: 8
 --- !u!1 &520090546
 GameObject:
   m_ObjectHideFlags: 0
