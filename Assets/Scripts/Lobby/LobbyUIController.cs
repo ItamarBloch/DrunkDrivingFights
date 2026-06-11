@@ -301,7 +301,7 @@ public class LobbyUIController : MonoBehaviour
         while (quickMatchActive && !NetworkClient.isConnected)
         {
             _quickMatchElapsed += Time.deltaTime;
-            RefreshQuickMatchDisplay();
+            //RefreshQuickMatchDisplay();
 
             if (_quickMatchElapsed >= QuickMatchMaxSeconds)
             {
@@ -318,14 +318,14 @@ public class LobbyUIController : MonoBehaviour
     /// Rebuilds the status text as:  "{base message}\n{MM:SS}"
     /// Call after changing _quickMatchBaseStatus or from the timer loop.
     /// </summary>
-    private void RefreshQuickMatchDisplay()
-    {
-        if (quickMatchStatusText == null) return;
-        int total = Mathf.FloorToInt(_quickMatchElapsed);
-        int mins  = Mathf.Min(total / 60, 99);
-        int secs  = total % 60;
-        quickMatchStatusText.text = $"{_quickMatchBaseStatus}\n{mins:00}:{secs:00}";
-    }
+    //private void RefreshQuickMatchDisplay()
+    //{
+    //    if (quickMatchStatusText == null) return;
+    //    int total = Mathf.FloorToInt(_quickMatchElapsed);
+    //    int mins  = Mathf.Min(total / 60, 99);
+    //    int secs  = total % 60;
+    //    quickMatchStatusText.text = $"{_quickMatchBaseStatus}\n{mins:00}:{secs:00}";
+    //}
 
     /// <summary>
     /// Continuously searches LAN + global servers for an available match.
