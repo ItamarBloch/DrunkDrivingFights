@@ -227,7 +227,7 @@ public class LobbyUIController : MonoBehaviour
         if (manager != null)
         {
             manager.OnLobbyPlayersUpdated += RefreshLobbyPlayers;
-            manager.OnRoomCreated += (_) => ShowScreen(Screen.MatchLobby);
+            manager.OnRoomCreated += HandleRoomCreated;
             manager.OnJoinFailed += OnJoinFailed;
         }
         LobbyPlayer.OnAnyPlayerDataChanged += RefreshLobbyPlayers;
@@ -238,10 +238,16 @@ public class LobbyUIController : MonoBehaviour
         if (manager != null)
         {
             manager.OnLobbyPlayersUpdated -= RefreshLobbyPlayers;
+            manager.OnRoomCreated -= HandleRoomCreated;
             manager.OnJoinFailed -= OnJoinFailed;
         }
         LobbyPlayer.OnAnyPlayerDataChanged -= RefreshLobbyPlayers;
     }
+
+    // Named handler (not a lambda) so it can be unsubscribed in UnsubscribeEvents.
+    // The manager is a DontDestroyOnLoad singleton, so a leaked subscription would
+    // keep a destroyed LobbyUIController alive and fire ShowScreen on dead panels.
+    private void HandleRoomCreated(string _) => ShowScreen(Screen.MatchLobby);
 
     // ── Screen Management ─────────────────────────────────────────────────────
 

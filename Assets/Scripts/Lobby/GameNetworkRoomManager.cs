@@ -322,6 +322,16 @@ public class GameNetworkRoomManager : NetworkRoomManager
         OnGameStarting?.Invoke();
         discovery.StopAdvertising();
         globalClient.UnregisterSession();
+
+        // We force-start from the owner button instead of going through Mirror's
+        // CheckReadyToBegin() flow, so pendingPlayers is never cleared the way the
+        // normal ready-up path would clear it. Stale entries (e.g. the host re-added
+        // after returning to the lobby) get spawned too early in OnServerSceneChanged
+        // — before the local client is ready — which corrupts the connection's player
+        // object and stops OnStartLocalPlayer from firing on the second match.
+        // Clear it here so everyone spawns via the normal post-scene-load ready path.
+        pendingPlayers.Clear();
+
         Debug.Log($"[Lobby] Starting game — {CurrentPlayerCount} players");
         ServerChangeScene(GameplayScene);
     }
