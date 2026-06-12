@@ -24,6 +24,13 @@ public class Rocket : NetworkBehaviour
     [SerializeField] private VFXReferences vfxReferences;
     [SerializeField] private Transform trailAnchor;
 
+    [Header("Safety")]
+    [Tooltip("Client-side fail-safe: if the server's despawn message is ever lost " +
+             "(e.g. a dropped reliable packet over relay), the rocket self-destructs " +
+             "after this long so it can't hang in the air with a looping whoosh. " +
+             "Must comfortably exceed the server-side rocketLifetime.")]
+    [SerializeField] private float clientSafetyLifetime = 12f;
+
     [SyncVar] private uint _ownerNetId;
 
     private WeaponSettings _weapon;
@@ -49,7 +56,20 @@ public class Rocket : NetworkBehaviour
         if (!isServer)
         {
             _rb.isKinematic = true;
+            // Fail-safe against a lost despawn message (see field tooltip).
+            // If the server destroys us normally, the object is gone before
+            // this fires and the coroutine is cancelled with it.
+            if (clientSafetyLifetime > 0f)
+                StartCoroutine(ClientSafetyDestroy());
         }
+    }
+
+    private IEnumerator ClientSafetyDestroy()
+    {
+        yield return new WaitForSeconds(clientSafetyLifetime);
+        // Still here after the server should long since have despawned us →
+        // the despawn was lost. Clean up locally (OnDestroy stops the whoosh).
+        Destroy(gameObject);
     }
 
     [Server]

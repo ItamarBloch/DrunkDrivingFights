@@ -74,6 +74,15 @@ public class CarController : NetworkBehaviour
     private CarInputData _localInput;
     private int _tickCounter;
 
+    // Timestamp of the most recent state snapshot we applied. Used to reject
+    // stale / out-of-order snapshots — the state RPC rides the unreliable
+    // channel, which reorders packets over a real relay link.
+    private double _lastStateTimestamp = double.MinValue;
+
+    // Cap on how far we extrapolate a snapshot forward (seconds). Guards against
+    // a bad clock or a huge hitch projecting the car miles away.
+    private const float MaxExtrapolation = 0.5f;
+
     // ── Death / Freeze State ────────────────────────────────
 
     private bool _isDead;
@@ -323,6 +332,19 @@ public class CarController : NetworkBehaviour
     private void RpcReceiveState(CarNetworkState state)
     {
         if (isServer) return;
+
+        // Reject stale / out-of-order snapshots. Without this an older snapshot
+        // arriving late (common on the unreliable channel over relay) yanks the
+        // car backward → the tremor.
+        if (state.Timestamp <= _lastStateTimestamp) return;
+        _lastStateTimestamp = state.Timestamp;
+
+        // Latency compensation: the snapshot describes where the car was when it
+        // was captured (RTT/2 ago). Project it forward to "now" using its own
+        // velocity so we correct toward the present, not the past. This removes
+        // the constant backward pull that prediction then has to fight.
+        float age = Mathf.Clamp((float)(NetworkTime.time - state.Timestamp), 0f, MaxExtrapolation);
+        state.Position += state.Velocity * age;
 
         if (isOwned)
         {
