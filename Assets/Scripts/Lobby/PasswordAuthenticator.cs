@@ -34,7 +34,7 @@ public class PasswordAuthenticator : NetworkAuthenticator
 
     public override void OnStartServer()
     {
-        NetworkServer.RegisterHandler<AuthRequestMessage>(OnAuthRequestMessage, false);
+        NetworkServer.ReplaceHandler<AuthRequestMessage>(OnAuthRequestMessage, false);
     }
 
     public override void OnStopServer()
@@ -86,7 +86,7 @@ public class PasswordAuthenticator : NetworkAuthenticator
 
     public override void OnStartClient()
     {
-        NetworkClient.RegisterHandler<AuthResponseMessage>(OnAuthResponseMessage, false);
+        NetworkClient.ReplaceHandler<AuthResponseMessage>(OnAuthResponseMessage, false);
     }
 
     public override void OnStopClient()

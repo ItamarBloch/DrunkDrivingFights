@@ -364,7 +364,7 @@ public class LobbyUIController : MonoBehaviour
             if (NetworkClient.isConnected) { quickMatchActive = false; yield break; }
 
             // Localhost probe once at ~4s (LAN broadcast doesn't loop back on Windows).
-            if (!localhostProbed && elapsed >= 4f)
+            if (!localhostProbed && elapsed >= 4f && !NetworkClient.active)
             {
                 localhostProbed = true;
                 if (quickMatchStatusText != null) quickMatchStatusText.text = "Trying local connection...";
@@ -398,7 +398,7 @@ public class LobbyUIController : MonoBehaviour
     /// <summary>Callback for QuickMatch LAN scans — joins the first open room found.</summary>
     private void TryJoinFromQuickMatch(List<DiscoveredRoom> rooms)
     {
-        if (!quickMatchActive || NetworkClient.isConnected) return;
+        if (!quickMatchActive || NetworkClient.active) return;
         var available = rooms.Where(r => r.currentPlayers < r.maxPlayers && !r.hasPassword).ToList();
         if (available.Count > 0)
         {

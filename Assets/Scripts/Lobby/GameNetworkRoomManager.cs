@@ -136,6 +136,18 @@ public class GameNetworkRoomManager : NetworkRoomManager
     /// </summary>
     public async void CreateRoom(string name, int maxPlayers, int mapIndex, string password = "")
     {
+        if (NetworkServer.active)
+        {
+            discovery.StopAdvertising();
+            globalClient.UnregisterSession();
+            StopHost();
+        }
+        else if (NetworkClient.active)
+        {
+            StopClient();
+        }
+        RestoreKcpTransport();
+
         MapData map = mapRegistry.GetMap(mapIndex);
         if (map == null)
         {
@@ -203,6 +215,9 @@ public class GameNetworkRoomManager : NetworkRoomManager
 
     public void JoinRoom(string address, int port = 7777, string password = "")
     {
+        if (NetworkClient.active && !NetworkServer.active)
+            StopClient();
+
         RestoreKcpTransport();
 
         if (passwordAuthenticator != null)
@@ -218,6 +233,9 @@ public class GameNetworkRoomManager : NetworkRoomManager
 
     public async void JoinRoomViaRelay(string relayJoinCode, string password = "")
     {
+        if (NetworkClient.active && !NetworkServer.active)
+            StopClient();
+
         try
         {
             await RelayManager.InitializeAsync();
@@ -312,15 +330,29 @@ public class GameNetworkRoomManager : NetworkRoomManager
 
     public override void OnRoomStartServer()
     {
+        foreach (var slot in roomSlots)
+        {
+            if (slot != null)
+                Destroy(slot.gameObject);
+        }
+        roomSlots.Clear();
+
         base.OnRoomStartServer();
         Debug.Log("[Lobby] Server started — beginning LAN advertisement");
 
         bool hasPassword = !string.IsNullOrEmpty(roomPassword);
         int port = GetGamePort();
 
-        // LAN: UDP broadcast on local network
-        discovery?.AdvertiseRoom(roomName, maxConnections, selectedMap,
-            hasPassword, HashPassword(roomPassword), roomCode);
+        // LAN: UDP broadcast on local network (non-fatal — relay rooms work without LAN)
+        try
+        {
+            discovery?.AdvertiseRoom(roomName, maxConnections, selectedMap,
+                hasPassword, HashPassword(roomPassword), roomCode);
+        }
+        catch (System.Net.Sockets.SocketException e)
+        {
+            Debug.LogWarning($"[Lobby] LAN advertisement failed (port in use): {e.Message}");
+        }
 
         // Global: register with the central matchmaking server (includes relay join code)
         globalClient?.RegisterSession(
@@ -431,6 +463,16 @@ public class GameNetworkRoomManager : NetworkRoomManager
 
     public override void OnRoomClientConnect()
     {
+        if (!NetworkServer.active)
+        {
+            foreach (var slot in roomSlots)
+            {
+                if (slot != null && slot.gameObject != null)
+                    Destroy(slot.gameObject);
+            }
+            roomSlots.Clear();
+        }
+
         base.OnRoomClientConnect();
         Debug.Log("[Lobby] Connected to room");
     }
@@ -440,11 +482,6 @@ public class GameNetworkRoomManager : NetworkRoomManager
         base.OnRoomClientDisconnect();
         Debug.Log("[Lobby] Disconnected from room");
 
-        // If we're in the gameplay scene when the server drops (e.g. host quit mid-match),
-        // the client would be stuck with a dead scene and no camera.
-        // Load the lobby so the player lands somewhere sane.
-        // RoomScene may be a full path (e.g. "Assets/Scenes/LobbyScene.unity") while
-        // GetActiveScene().name is always just the bare name — strip path/extension to compare.
         string activeScene = UnityEngine.SceneManagement.SceneManager.GetActiveScene().name;
         string roomSceneName = System.IO.Path.GetFileNameWithoutExtension(RoomScene);
         if (activeScene != roomSceneName)

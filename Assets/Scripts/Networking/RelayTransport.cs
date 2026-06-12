@@ -26,6 +26,7 @@ public class RelayTransport : Transport
     // Client
     private UNetConn _clientConn;
     private bool _clientConnected;
+    private bool _clientDisconnecting;
 
     public void ConfigureAsHost(RelayServerData data)
     {
@@ -55,6 +56,9 @@ public class RelayTransport : Transport
             Debug.LogError("[RelayTransport] Not configured");
             return;
         }
+
+        DisposeDriver();
+        _serverActive = false;
 
         var settings = new NetworkSettings();
         settings.WithRelayParameters(ref _relayServerData);
@@ -99,6 +103,7 @@ public class RelayTransport : Transport
         conn.Disconnect(_driver);
         _connToId.Remove(conn);
         _idToConn.Remove(connectionId);
+        OnServerDisconnected?.Invoke(connectionId);
     }
 
     public override string ServerGetClientAddress(int connectionId) => "relay";
@@ -113,6 +118,10 @@ public class RelayTransport : Transport
             if (conn.IsCreated)
                 conn.Disconnect(_driver);
         }
+
+        if (_driver.IsCreated)
+            _driver.ScheduleUpdate().Complete();
+
         _idToConn.Clear();
         _connToId.Clear();
 
@@ -131,6 +140,9 @@ public class RelayTransport : Transport
             OnClientError?.Invoke(TransportError.Unexpected, "Relay not configured");
             return;
         }
+
+        if (!_serverActive)
+            DisposeDriver();
 
         var settings = new NetworkSettings();
         settings.WithRelayParameters(ref _relayServerData);
@@ -164,12 +176,22 @@ public class RelayTransport : Transport
 
     public override void ClientDisconnect()
     {
+        if (_clientDisconnecting) return;
+        _clientDisconnecting = true;
+
         if (_clientConn.IsCreated && _driver.IsCreated)
+        {
             _clientConn.Disconnect(_driver);
+            _driver.ScheduleUpdate().Complete();
+        }
         _clientConnected = false;
+
+        OnClientDisconnected?.Invoke();
 
         if (!_serverActive)
             DisposeDriver();
+
+        _clientDisconnecting = false;
     }
 
     // ─── Shared ──────────────────────────────────────────────
@@ -286,7 +308,7 @@ public class RelayTransport : Transport
                     _clientConnected = false;
                     OnClientDisconnected?.Invoke();
                     Debug.Log("[RelayTransport] Client disconnected from relay");
-                    break;
+                    return;
             }
         }
     }
