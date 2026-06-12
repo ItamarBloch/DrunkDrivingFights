@@ -95,6 +95,7 @@ public class LobbyPlayer : NetworkRoomPlayer
         NotifyUpdate();
     }
 
+    private void OnDestroy() => NotifyUpdate();
     private void OnNameChanged(string oldVal, string newVal) => NotifyUpdate();
     private void OnColorChanged(Color oldVal, Color newVal) => NotifyUpdate();
     private void OnOwnerChanged(bool oldVal, bool newVal) => NotifyUpdate();

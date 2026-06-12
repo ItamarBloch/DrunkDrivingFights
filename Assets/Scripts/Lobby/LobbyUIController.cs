@@ -301,7 +301,7 @@ public class LobbyUIController : MonoBehaviour
         while (quickMatchActive && !NetworkClient.isConnected)
         {
             _quickMatchElapsed += Time.deltaTime;
-            RefreshQuickMatchDisplay();
+            //RefreshQuickMatchDisplay();
 
             if (_quickMatchElapsed >= QuickMatchMaxSeconds)
             {
@@ -318,14 +318,14 @@ public class LobbyUIController : MonoBehaviour
     /// Rebuilds the status text as:  "{base message}\n{MM:SS}"
     /// Call after changing _quickMatchBaseStatus or from the timer loop.
     /// </summary>
-    private void RefreshQuickMatchDisplay()
-    {
-        if (quickMatchStatusText == null) return;
-        int total = Mathf.FloorToInt(_quickMatchElapsed);
-        int mins  = Mathf.Min(total / 60, 99);
-        int secs  = total % 60;
-        quickMatchStatusText.text = $"{_quickMatchBaseStatus}\n{mins:00}:{secs:00}";
-    }
+    //private void RefreshQuickMatchDisplay()
+    //{
+    //    if (quickMatchStatusText == null) return;
+    //    int total = Mathf.FloorToInt(_quickMatchElapsed);
+    //    int mins  = Mathf.Min(total / 60, 99);
+    //    int secs  = total % 60;
+    //    quickMatchStatusText.text = $"{_quickMatchBaseStatus}\n{mins:00}:{secs:00}";
+    //}
 
     /// <summary>
     /// Continuously searches LAN + global servers for an available match.
@@ -364,7 +364,7 @@ public class LobbyUIController : MonoBehaviour
             if (NetworkClient.isConnected) { quickMatchActive = false; yield break; }
 
             // Localhost probe once at ~4s (LAN broadcast doesn't loop back on Windows).
-            if (!localhostProbed && elapsed >= 4f)
+            if (!localhostProbed && elapsed >= 4f && !NetworkClient.active)
             {
                 localhostProbed = true;
                 if (quickMatchStatusText != null) quickMatchStatusText.text = "Trying local connection...";
@@ -398,7 +398,7 @@ public class LobbyUIController : MonoBehaviour
     /// <summary>Callback for QuickMatch LAN scans — joins the first open room found.</summary>
     private void TryJoinFromQuickMatch(List<DiscoveredRoom> rooms)
     {
-        if (!quickMatchActive || NetworkClient.isConnected) return;
+        if (!quickMatchActive || NetworkClient.active) return;
         var available = rooms.Where(r => r.currentPlayers < r.maxPlayers && !r.hasPassword).ToList();
         if (available.Count > 0)
         {
