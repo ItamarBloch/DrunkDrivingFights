@@ -12,4 +12,4 @@ friends and play online.
 
 ---
 
-*Made by P0PAnDA. Don't drink and drive — in real life.* 🍻🚫
+*Made by Itamar Bloch. Don't drink and drive — in real life.* 🍻🚫
