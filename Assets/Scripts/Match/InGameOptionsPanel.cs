@@ -18,6 +18,10 @@ public class InGameOptionsPanel : MonoBehaviour
 
     public static bool IsOpen { get; private set; }
 
+    // Once the match has ended the end-game screen owns the UI —
+    // ESC must no longer open this panel.
+    private bool _matchEnded;
+
     private void Start()
     {
         panelRoot.SetActive(false);
@@ -25,10 +29,22 @@ public class InGameOptionsPanel : MonoBehaviour
         resumeButton.onClick.AddListener(Close);
     }
 
+    private void OnEnable()  => MatchManager.OnMatchEnded += HandleMatchEnded;
+    private void OnDisable() => MatchManager.OnMatchEnded -= HandleMatchEnded;
+
+    private void HandleMatchEnded(uint _)
+    {
+        _matchEnded = true;
+        if (IsOpen) Close();
+    }
+
     private void Update()
     {
         // Only act when a local player exists (i.e. we're in a match)
         if (NetworkClient.localPlayer == null) return;
+
+        // After the match ends, ESC is dead — only the end-game screen shows.
+        if (_matchEnded) return;
 
         var kb = UnityEngine.InputSystem.Keyboard.current;
         if (kb != null && kb.escapeKey.wasPressedThisFrame)
