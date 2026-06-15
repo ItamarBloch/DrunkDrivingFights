@@ -66,7 +66,7 @@ public class CarRemoteInterpolator : MonoBehaviour
         _rb.position        = state.Position;
         _rb.rotation        = state.Rotation;
         _rb.linearVelocity  = state.Velocity;
-        _rb.angularVelocity = state.AngularVelocity;
+        _rb.angularVelocity = Vector3.zero;
         _hasTarget = false;
     }
 }

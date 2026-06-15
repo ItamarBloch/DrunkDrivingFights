@@ -62,6 +62,13 @@ public class Rocket : NetworkBehaviour
             if (clientSafetyLifetime > 0f)
                 StartCoroutine(ClientSafetyDestroy());
         }
+
+        // Stop the rocket from physically shoving the car that fired it. A kinematic
+        // rocket on a client still pushes the owner's dynamic (predicted) car, and a
+        // dynamic rocket on the server does the same — that overlap-on-spawn impulse
+        // was the "knock-up". We only ignore the SHOOTER, so the rocket still
+        // collides with and explodes on other players and walls.
+        IgnoreShooterCollisions();
     }
 
     private IEnumerator ClientSafetyDestroy()
@@ -79,6 +86,9 @@ public class Rocket : NetworkBehaviour
         _weapon = weapon;
         _ownerNetId = ownerNetId;
         _lifetimeTimer = weapon.rocketLifetime;
+
+        // Server-side: ignore the shooter's car so the spawn overlap can't knock it.
+        IgnoreShooterCollisions();
 
         Vector3 launchVelocity;
         if (weapon.inheritShooterVelocity)
@@ -124,6 +134,40 @@ public class Rocket : NetworkBehaviour
 
         _lifetimeTimer -= Time.fixedDeltaTime;
         if (_lifetimeTimer <= 0f) Explode();
+    }
+
+    /// <summary>
+    /// Disable physics collisions between this rocket and the car that fired it, on
+    /// whichever peer we're running on. Skips WheelColliders (special-cased by PhysX).
+    /// Idempotent and safe to call more than once (server + client paths).
+    /// </summary>
+    private void IgnoreShooterCollisions()
+    {
+        NetworkIdentity owner = ResolveOwnerIdentity();
+        if (owner == null) return;
+
+        Collider[] rocketCols = GetComponentsInChildren<Collider>();
+        Collider[] carCols = owner.GetComponentsInChildren<Collider>();
+
+        foreach (Collider rc in rocketCols)
+        {
+            if (rc == null) continue;
+            foreach (Collider cc in carCols)
+            {
+                if (cc == null || cc is WheelCollider) continue;
+                Physics.IgnoreCollision(rc, cc, true);
+            }
+        }
+    }
+
+    private NetworkIdentity ResolveOwnerIdentity()
+    {
+        if (_ownerNetId == 0) return null;
+        if (isServer && NetworkServer.spawned.TryGetValue(_ownerNetId, out NetworkIdentity s))
+            return s;
+        if (NetworkClient.active && NetworkClient.spawned.TryGetValue(_ownerNetId, out NetworkIdentity c))
+            return c;
+        return null;
     }
 
     // Unity calls OnCollisionEnter on ALL clients — [Server] attribute

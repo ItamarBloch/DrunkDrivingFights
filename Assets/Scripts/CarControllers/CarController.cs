@@ -1,6 +1,5 @@
 ﻿using Mirror;
 using UnityEngine;
-
 /// <summary>
 /// Networked car controller using Mirror.
 /// 
@@ -49,14 +48,22 @@ public class CarController : NetworkBehaviour
     [SerializeField] private Vector3 centerOfMassOffset = new Vector3(0f, -0.5f, 0f);
 
     [Header("Network Tuning")]
-    [Tooltip("How many FixedUpdate ticks between server state broadcasts.")]
-    [SerializeField] private int networkSendRate = 2;
+    [Tooltip("How many FixedUpdate ticks between server state broadcasts. 1 = every tick (~50Hz), " +
+             "matching how Rocket League sends ~60Hz. Affordable now that the state packet is slim.")]
+    [SerializeField] private int networkSendRate = 1;
 
-    [Tooltip("If the owner's predicted position is this far from server state, snap correct.")]
-    [SerializeField] private float correctionSnapThreshold = 3f;
+    [Tooltip("Hard-snap only when divergence exceeds this (metres). Kept large so normal play never " +
+             "snaps — only genuine teleports/respawns do. Everything smaller eases in smoothly.")]
+    [SerializeField] private float correctionSnapThreshold = 8f;
 
-    [Tooltip("Smooth correction speed when within snap threshold.")]
+    [Tooltip("How fast the owner bleeds off a measured prediction error (higher = faster, snappier).")]
     [SerializeField] private float correctionLerpSpeed = 10f;
+
+    [Tooltip("Positional divergence below this (metres) is ignored — absorbs normal RTT/jitter noise without correcting.")]
+    [SerializeField] private float positionDeadzone = 0.25f;
+
+    [Tooltip("Rotational divergence below this (degrees) is ignored.")]
+    [SerializeField] private float rotationDeadzoneDeg = 2f;
 
     // ── Subsystems ──────────────────────────────────────────
 
@@ -70,9 +77,29 @@ public class CarController : NetworkBehaviour
 
     // ── Network State ───────────────────────────────────────
 
-    private CarInputData _serverInput;
     private CarInputData _localInput;
     private int _tickCounter;
+
+    // Server: the most recent non-stale input received from the owning client.
+    // Applied immediately each tick (and naturally repeated if no newer input
+    // arrived). We deliberately do NOT queue/buffer inputs: the owner predicts
+    // locally and immediately, so the server has to stay in phase by applying the
+    // newest input the moment it lands. A buffer added a phase delay that dragged
+    // the owner's prediction backward and made steering feel unresponsive.
+    private CarInputData _serverInput;
+    private uint _lastInputSeq;
+    private bool _hasReceivedInput;
+
+    // Server: sequence of the input whose physics result the most recently CAPTURED
+    // state reflects. Unity steps physics AFTER FixedUpdate, so the rigidbody pose we
+    // read in BroadcastState reflects the input applied LAST tick — hence we stamp the
+    // snapshot with the sequence recorded last tick (updated at the end of ServerTick).
+    // This is the reconciliation key the owner client matches against (see RpcReceiveState).
+    private uint _lastAppliedSeq;
+
+    // Owner's outgoing input sequence counter — lets the server drop stale/reordered
+    // inputs that the unreliable channel can deliver late.
+    private uint _inputSequence;
 
     // Timestamp of the most recent state snapshot we applied. Used to reject
     // stale / out-of-order snapshots — the state RPC rides the unreliable
@@ -82,6 +109,32 @@ public class CarController : NetworkBehaviour
     // Cap on how far we extrapolate a snapshot forward (seconds). Guards against
     // a bad clock or a huge hitch projecting the car miles away.
     private const float MaxExtrapolation = 0.5f;
+
+    // ── Owner Prediction History ────────────────────────────
+    // Ring buffer of the poses our local prediction passed through, each tagged with
+    // the INPUT SEQUENCE that produced it. When a server snapshot arrives carrying
+    // "this pose is the result of your input #N", we compare it to where WE predicted
+    // we were after that SAME input #N. Because both sides reflect identical inputs,
+    // the input-in-flight lead cancels EXACTLY and only genuine physics divergence is
+    // corrected. (Keying on wall-clock time, as before, secretly compared different
+    // input sets — the server hadn't received our latest input yet — leaving a
+    // persistent phantom error that felt like ~RTT of input lag.)
+    private struct PredictedPose
+    {
+        public uint       Sequence;
+        public Vector3    Position;
+        public Quaternion Rotation;
+    }
+
+    private const int HistoryCapacity = 64; // ~1.3s at 50Hz — covers any relay RTT
+    private readonly PredictedPose[] _history = new PredictedPose[HistoryCapacity];
+    private int _historyCount;
+    private int _historyHead; // index of next write
+
+    // Remaining error to bleed into the body over the next few ticks (set on
+    // reconcile, decayed every OwnerPredictionTick). Smooth, not instantaneous.
+    private Vector3    _posError;
+    private Quaternion _rotError = Quaternion.identity;
 
     // ── Death / Freeze State ────────────────────────────────
 
@@ -107,6 +160,15 @@ public class CarController : NetworkBehaviour
 
     private void Awake()
     {
+        // Throttle this component's SyncVars (SyncedSpeedKmh, _isFrozen) to ~10Hz.
+        // SyncedSpeedKmh was being dirtied every physics tick and synced at the full
+        // 60Hz over the reliable channel — a constant per-frame trickle that adds to
+        // relay congestion. 10Hz is plenty: the speedometer and engine audio both
+        // lerp toward the value every frame, and _isFrozen changes only at match
+        // start/end. The car's POSITION state is a separate unreliable RPC and is
+        // unaffected by this.
+        syncInterval = 0.1f;
+
         CacheAndCreateComponents();
         ConfigureRigidbody();
         InitializeSubsystems();
@@ -227,7 +289,11 @@ public class CarController : NetworkBehaviour
         float steer = _motor.IsDrifting ? _localInput.Steer * settings.driftSteerMultiplier : _localInput.Steer;
         _steering.Tick(steer, _motor.SpeedKmh);
 
-        SyncedSpeedKmh = _motor.SpeedKmh;
+        // Only re-dirty the SyncVar on a meaningful change so steady cruising /
+        // idling sends nothing; combined with the 10Hz syncInterval this keeps the
+        // speed sync off the per-frame reliable path.
+        float speedNow = _motor.SpeedKmh;
+        if (Mathf.Abs(SyncedSpeedKmh - speedNow) >= 1f) SyncedSpeedKmh = speedNow;
 
         _tickCounter++;
         if (_tickCounter >= networkSendRate)
@@ -243,12 +309,18 @@ public class CarController : NetworkBehaviour
 
     private void ServerTick()
     {
-        _motor.Tick(_serverInput);
-        _airControl.Tick(ToAerialInput(_serverInput));
-        float steer = _motor.IsDrifting ? _serverInput.Steer * settings.driftSteerMultiplier : _serverInput.Steer;
+        CarInputData input = _serverInput;
+
+        _motor.Tick(input);
+        _airControl.Tick(ToAerialInput(input));
+        float steer = _motor.IsDrifting ? input.Steer * settings.driftSteerMultiplier : input.Steer;
         _steering.Tick(steer, _motor.SpeedKmh);
 
-        SyncedSpeedKmh = _motor.SpeedKmh;
+        // Only re-dirty the SyncVar on a meaningful change so steady cruising /
+        // idling sends nothing; combined with the 10Hz syncInterval this keeps the
+        // speed sync off the per-frame reliable path.
+        float speedNow = _motor.SpeedKmh;
+        if (Mathf.Abs(SyncedSpeedKmh - speedNow) >= 1f) SyncedSpeedKmh = speedNow;
 
         _tickCounter++;
         if (_tickCounter >= networkSendRate)
@@ -256,6 +328,11 @@ public class CarController : NetworkBehaviour
             _tickCounter = 0;
             BroadcastState();
         }
+
+        // Physics steps AFTER this method returns, so the pose we capture NEXT tick
+        // will reflect the input we just applied here. Record its sequence now so the
+        // next snapshot is stamped correctly for owner reconciliation.
+        _lastAppliedSeq = input.Sequence;
     }
 
     private void BroadcastState()
@@ -268,13 +345,11 @@ public class CarController : NetworkBehaviour
     {
         return new CarNetworkState
         {
-            Position = _rb.position,
-            Rotation = _rb.rotation,
-            Velocity = _rb.linearVelocity,
-            AngularVelocity = _rb.angularVelocity,
-            SteerAngle = _steering.CurrentSteerAngle,
-            SpeedKmh = _motor.SpeedKmh,
-            Timestamp = NetworkTime.time
+            Position              = _rb.position,
+            Rotation              = _rb.rotation,
+            Velocity              = _rb.linearVelocity,
+            Timestamp             = NetworkTime.time,
+            LastProcessedInputSeq = _lastAppliedSeq
         };
     }
 
@@ -284,37 +359,176 @@ public class CarController : NetworkBehaviour
 
     private void OwnerPredictionTick()
     {
+        // Record where prediction currently sits BEFORE this step integrates,
+        // then bleed off any outstanding correction. ApplyOwnerCorrection also
+        // shifts the freshly-recorded entry, so history stays in the corrected
+        // frame and the next snapshot doesn't re-measure error we already fixed.
+        RecordPredictedPose();
+        ApplyOwnerCorrection();
+
+        // Stamp + send one input per FixedUpdate. The Sequence lets the server reject
+        // stale/reordered inputs (see CmdSendInput) — it applies the newest immediately.
+        _localInput.Sequence = ++_inputSequence;
         CmdSendInput(_localInput);
 
         _motor.Tick(_localInput);
         _airControl.Tick(ToAerialInput(_localInput));
         float steer = _motor.IsDrifting ? _localInput.Steer * settings.driftSteerMultiplier : _localInput.Steer;
         _steering.Tick(steer, _motor.SpeedKmh);
+
+        // Local-only write: keeps the owner's speedometer/engine audio accurate
+        // every frame regardless of how often the throttled server value arrives.
+        // (On a non-host client this just overwrites the field locally; the server
+        // remains the authority and re-syncs it at the throttled rate.)
+        SyncedSpeedKmh = _motor.SpeedKmh;
     }
 
+    /// <summary>
+    /// Reconcile a server snapshot against our OWN prediction history, keyed by input
+    /// sequence: we compare the snapshot to where we predicted we'd be after the SAME
+    /// input the server says it last applied (serverState.LastProcessedInputSeq). Same
+    /// inputs on both sides → the input-in-flight lead cancels exactly and only genuine
+    /// physics divergence remains. Small divergence → ignored. Moderate → eased in
+    /// smoothly. Large → hard snap (real desync / teleport).
+    /// </summary>
     private void OwnerReconcile(CarNetworkState serverState)
     {
-        float posError = Vector3.Distance(_rb.position, serverState.Position);
-
-        if (posError > correctionSnapThreshold)
+        if (!TryGetPredictedPoseForSeq(serverState.LastProcessedInputSeq, out Vector3 predPos, out Quaternion predRot))
         {
-            _rb.position = serverState.Position;
-            _rb.rotation = serverState.Rotation;
-            _rb.linearVelocity = serverState.Velocity;
-            _rb.angularVelocity = serverState.AngularVelocity;
+            // Sequence aged out of the ring (or no history yet) — seed directly.
+            SnapToServer(serverState);
+            return;
         }
-        else if (posError > 0.05f)
+
+        Vector3 posError = serverState.Position - predPos;
+        float errMag = posError.magnitude;
+
+        if (errMag > correctionSnapThreshold)
         {
-            _rb.position = Vector3.Lerp(
-                _rb.position,
-                serverState.Position,
-                Time.fixedDeltaTime * correctionLerpSpeed
-            );
-            _rb.rotation = Quaternion.Slerp(
-                _rb.rotation,
-                serverState.Rotation,
-                Time.fixedDeltaTime * correctionLerpSpeed
-            );
+            SnapToServer(serverState);
+            return;
+        }
+
+        // Replace (not accumulate) the smoothing target: because history is kept
+        // in the corrected frame, each snapshot already reflects what we've fixed.
+        _posError = errMag > positionDeadzone ? posError : Vector3.zero;
+
+        Quaternion rotError = serverState.Rotation * Quaternion.Inverse(predRot);
+        rotError.ToAngleAxis(out float angleDeg, out _);
+        if (angleDeg > 180f) angleDeg -= 360f;
+        _rotError = Mathf.Abs(angleDeg) > rotationDeadzoneDeg ? rotError : Quaternion.identity;
+    }
+
+    /// <summary>
+    /// Hard-snap the body to authoritative state; invalidates prediction history.
+    /// Reserved for genuine teleports/respawns (error > correctionSnapThreshold) or
+    /// seeding before any history exists — never normal play. Angular velocity is
+    /// zeroed rather than forced from the snapshot: forcing a stale spin onto a
+    /// wheeled body was what flipped/knocked the car up on a correction.
+    /// </summary>
+    private void SnapToServer(CarNetworkState serverState)
+    {
+        _rb.position        = serverState.Position;
+        _rb.rotation        = serverState.Rotation;
+        _rb.linearVelocity  = serverState.Velocity;
+        _rb.angularVelocity = Vector3.zero;
+
+        _posError     = Vector3.zero;
+        _rotError     = Quaternion.identity;
+        _historyCount = 0;
+        _historyHead  = 0;
+    }
+
+    /// <summary>Bleed a fraction of the outstanding error into the body and keep history consistent.</summary>
+    private void ApplyOwnerCorrection()
+    {
+        float t = Mathf.Clamp01(correctionLerpSpeed * Time.fixedDeltaTime);
+
+        Vector3 posStep = Vector3.zero;
+        if (_posError.sqrMagnitude > 1e-8f)
+        {
+            posStep = _posError * t;
+            _rb.position += posStep;
+            _posError -= posStep;
+        }
+        else
+        {
+            _posError = Vector3.zero;
+        }
+
+        Quaternion rotStep = Quaternion.Slerp(Quaternion.identity, _rotError, t);
+        _rb.rotation = rotStep * _rb.rotation;
+        _rotError = Quaternion.Inverse(rotStep) * _rotError;
+
+        ShiftHistory(posStep, rotStep);
+    }
+
+    // ── Prediction History Buffer ───────────────────────────
+
+    private void RecordPredictedPose()
+    {
+        // Called at the top of OwnerPredictionTick, BEFORE this tick's input is stamped
+        // and applied. So the rigidbody pose we read here is the result of LAST tick's
+        // input — whose sequence is the current _inputSequence value (not yet ++'d).
+        // That matches how the server labels its captured pose (see _lastAppliedSeq).
+        _history[_historyHead] = new PredictedPose
+        {
+            Sequence = _inputSequence,
+            Position = _rb.position,
+            Rotation = _rb.rotation
+        };
+        _historyHead = (_historyHead + 1) % HistoryCapacity;
+        if (_historyCount < HistoryCapacity) _historyCount++;
+    }
+
+    private PredictedPose GetHistory(int logicalIndex)
+    {
+        int idx = (_historyHead - _historyCount + logicalIndex + HistoryCapacity * 2) % HistoryCapacity;
+        return _history[idx];
+    }
+
+    /// <summary>
+    /// Fetch the predicted pose we held right after applying owner input <paramref name="seq"/>.
+    /// Sequences are contiguous (one per tick), so an exact match is the norm. Returns
+    /// false when the sequence has already aged out of the ring (huge lag spike) or no
+    /// history exists yet — the caller treats that as "reseed from the snapshot".
+    /// </summary>
+    private bool TryGetPredictedPoseForSeq(uint seq, out Vector3 pos, out Quaternion rot)
+    {
+        pos = Vector3.zero;
+        rot = Quaternion.identity;
+        if (_historyCount == 0) return false;
+
+        for (int i = 0; i < _historyCount; i++)
+        {
+            PredictedPose p = GetHistory(i);
+            if (p.Sequence == seq)
+            {
+                pos = p.Position;
+                rot = p.Rotation;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Shift every stored pose by the correction we just applied to the body, so
+    /// the history mirrors the corrected path. Without this, the next snapshot
+    /// would re-measure error we already removed and over-correct (jitter).
+    /// </summary>
+    private void ShiftHistory(Vector3 posDelta, Quaternion rotDelta)
+    {
+        bool hasPos = posDelta.sqrMagnitude > 1e-10f;
+        bool hasRot = Quaternion.Angle(rotDelta, Quaternion.identity) > 1e-4f;
+        if (!hasPos && !hasRot) return;
+
+        for (int i = 0; i < _historyCount; i++)
+        {
+            int idx = (_historyHead - _historyCount + i + HistoryCapacity * 2) % HistoryCapacity;
+            if (hasPos) _history[idx].Position += posDelta;
+            if (hasRot) _history[idx].Rotation = rotDelta * _history[idx].Rotation;
         }
     }
 
@@ -325,6 +539,12 @@ public class CarController : NetworkBehaviour
     [Command(channel = Channels.Unreliable)]
     private void CmdSendInput(CarInputData input)
     {
+        // Reject stale/duplicate inputs the unreliable channel delivered out of order,
+        // then apply immediately. _serverInput persists, so if no newer input arrives
+        // the server simply reuses the last one next tick — no buffering, no delay.
+        if (_hasReceivedInput && input.Sequence <= _lastInputSeq) return;
+        _lastInputSeq = input.Sequence;
+        _hasReceivedInput = true;
         _serverInput = input;
     }
 
@@ -339,19 +559,19 @@ public class CarController : NetworkBehaviour
         if (state.Timestamp <= _lastStateTimestamp) return;
         _lastStateTimestamp = state.Timestamp;
 
-        // Latency compensation: the snapshot describes where the car was when it
-        // was captured (RTT/2 ago). Project it forward to "now" using its own
-        // velocity so we correct toward the present, not the past. This removes
-        // the constant backward pull that prediction then has to fight.
-        float age = Mathf.Clamp((float)(NetworkTime.time - state.Timestamp), 0f, MaxExtrapolation);
-        state.Position += state.Velocity * age;
-
         if (isOwned)
         {
+            // Owner: reconcile against same-time prediction history. No forward
+            // extrapolation here — we don't want to project the snapshot to "now";
+            // OwnerReconcile compares it to where WE were at its own timestamp.
             OwnerReconcile(state);
         }
         else
         {
+            // Remote: project the (stale) snapshot forward to "now" using its own
+            // velocity so the interpolator chases the present, not the past.
+            float age = Mathf.Clamp((float)(NetworkTime.time - state.Timestamp), 0f, MaxExtrapolation);
+            state.Position += state.Velocity * age;
             _interpolator.SetTarget(state);
         }
     }

@@ -462,8 +462,8 @@ MonoBehaviour:
   - {fileID: 525903262748600628}
   - {fileID: 7609414564896214647}
   centerOfMassOffset: {x: 0, y: -0.5, z: 0}
-  networkSendRate: 2
-  correctionSnapThreshold: 3
+  networkSendRate: 1
+  correctionSnapThreshold: 8
   correctionLerpSpeed: 10
   SyncedSpeedKmh: 0
 --- !u!114 &6146257441794110455
