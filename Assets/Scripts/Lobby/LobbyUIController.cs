@@ -659,9 +659,9 @@ public class LobbyUIController : MonoBehaviour
         }
 
         if (lobbyRoomNameText  != null) lobbyRoomNameText.text  = displayRoomName.ToUpper();
-        if (lobbyRoomCodeText  != null) lobbyRoomCodeText.text  = $"CODE: {displayCode}";
+        if (lobbyRoomCodeText  != null) lobbyRoomCodeText.text  = $"Room Code: {displayCode}";
         if (lobbyMapText       != null) lobbyMapText.text       = $"Map: {displayMap}";
-        if (lobbyPlayerCountText != null) lobbyPlayerCountText.text = $"{manager.CurrentPlayerCount}/{displayMax}";
+        if (lobbyPlayerCountText != null) lobbyPlayerCountText.text = $"Players: {manager.CurrentPlayerCount}/{displayMax}";
 
         ClearChildren(playerListContent);
 

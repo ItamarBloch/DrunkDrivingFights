@@ -165,7 +165,7 @@ public class Rocket : NetworkBehaviour
         }
 
         // Whoosh loop — follows the rocket as it moves
-        _whooshSource = SoundManager.Instance?.PlayAttached("rocket_whoosh", transform, loop: true);
+        _whooshSource = SoundManager.Instance?.PlayAttached("rocket_whoosh", transform, loop: false);
     }
 
     [ClientRpc]

@@ -12,9 +12,10 @@ using TMPro;
 ///   4. (Optional) Drag the Button's text into 'buttonLabel' so it shows
 ///      "Windowed" / "Fullscreen" and flips on click.
 ///
-/// It only flips Screen.fullScreen — it never forces a resolution, so the
-/// aspect ratio (and therefore your UI layout) is left untouched. Unity
-/// remembers the fullscreen choice across sessions on its own.
+/// Fullscreen uses the monitor's native resolution. Windowed uses a fraction
+/// of that native resolution (windowedScale), so the window is comfortably
+/// smaller than the screen while keeping the SAME aspect ratio — UI layout
+/// stays consistent between the two modes.
 /// </summary>
 public class FullscreenToggle : MonoBehaviour
 {
@@ -23,6 +24,11 @@ public class FullscreenToggle : MonoBehaviour
 
     [Tooltip("Optional. Text that shows the CURRENT mode and updates on toggle.")]
     [SerializeField] private TMP_Text buttonLabel;
+
+    [Tooltip("Windowed size as a fraction of the monitor's native resolution. " +
+             "Aspect ratio is preserved because width and height scale together.")]
+    [Range(0.3f, 0.95f)]
+    [SerializeField] private float windowedScale = 0.7f;
 
     private void Start()
     {
@@ -38,8 +44,22 @@ public class FullscreenToggle : MonoBehaviour
 
     public void SetFullscreen(bool fullscreen)
     {
-        // Keeps the current resolution; only the windowing mode changes.
-        Screen.fullScreen = fullscreen;
+        // Native monitor resolution — the source aspect ratio for both modes.
+        Resolution native = Screen.currentResolution;
+
+        if (fullscreen)
+        {
+            Screen.SetResolution(native.width, native.height, FullScreenMode.FullScreenWindow);
+        }
+        else
+        {
+            // Scale both dimensions equally so the aspect ratio is unchanged,
+            // just smaller than the screen.
+            int w = Mathf.RoundToInt(native.width * windowedScale);
+            int h = Mathf.RoundToInt(native.height * windowedScale);
+            Screen.SetResolution(w, h, FullScreenMode.Windowed);
+        }
+
         RefreshLabel(fullscreen);
     }
 
