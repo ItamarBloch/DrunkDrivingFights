@@ -215,8 +215,8 @@ public class Rocket : MonoBehaviour
                 _trailInstance = Instantiate(entry.Value.prefab, anchor.position, anchor.rotation, anchor);
         }
 
-        // Whoosh loop — follows the rocket as it moves.
-        _whooshSource = SoundManager.Instance?.PlayAttached("rocket_whoosh", transform, loop: true);
+        // Whoosh — follows the rocket as it moves (one-shot, not looped).
+        _whooshSource = SoundManager.Instance?.PlayAttached("rocket_whoosh", transform, loop: false);
     }
 
     private void HideRenderers()

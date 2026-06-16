@@ -86,6 +86,16 @@ public class ThirdPersonCameraController : NetworkBehaviour
     [Header("Cursor")]
     [SerializeField] private bool lockCursor = true;
 
+    [Header("Camera Distance")]
+    [Tooltip("Distance presets cycled with the cycle key (near → far). Press cycles to the next and wraps back to the first.")]
+    [SerializeField] private float[] distancePresets = { 6f, 10f, 14f };
+
+    [Tooltip("Key that cycles to the next distance preset")]
+    [SerializeField] private UnityEngine.InputSystem.Key cycleDistanceKey = UnityEngine.InputSystem.Key.V;
+
+    [Tooltip("How quickly the camera eases to a newly selected distance")]
+    [SerializeField] private float distanceLerpSpeed = 8f;
+
     // ──────────────────────────────────────────────
     //  RUNTIME REFERENCES
     // ──────────────────────────────────────────────
@@ -99,6 +109,11 @@ public class ThirdPersonCameraController : NetworkBehaviour
     private Rigidbody carRigidbody;
     private float currentFOV;
     private bool cameraCreated;
+
+    // Camera distance (cycled with V) — persisted between sessions
+    public const string PrefCamDistanceIndex = "CamDistanceIndex";
+    private int   _distanceIndex;
+    private float _targetRadius;
 
     // Manually tracked orbit values (so we can layer the look-back offset on top)
     private float _hValue    = 0f;
@@ -162,7 +177,9 @@ public class ThirdPersonCameraController : NetworkBehaviour
         // ── 3. Orbital Follow (Position Control) ──
         orbitalFollow = vcamGO.AddComponent<CinemachineOrbitalFollow>();
         orbitalFollow.OrbitStyle = CinemachineOrbitalFollow.OrbitStyles.Sphere;
-        orbitalFollow.Radius = orbitRadius;
+        _distanceIndex = LoadDistanceIndex();
+        _targetRadius = ResolveRadius(_distanceIndex);
+        orbitalFollow.Radius = _targetRadius;
         orbitalFollow.TargetOffset = targetOffset;
         orbitalFollow.TrackerSettings.PositionDamping = positionDamping;
 
@@ -198,11 +215,27 @@ public class ThirdPersonCameraController : NetworkBehaviour
         {
             var deoccluder = vcamGO.AddComponent<CinemachineDeoccluder>();
             deoccluder.CollideAgainst = collisionLayers;
+            deoccluder.MinimumDistanceFromTarget = 0.3f;
 
             if (!string.IsNullOrEmpty(ignoreCollisionTag))
             {
                 deoccluder.IgnoreTag = ignoreCollisionTag;
             }
+
+            // AvoidObstacles is a struct with no field initializer, so a runtime
+            // AddComponent leaves it zeroed (Enabled=false → no collision at all).
+            // ObstacleAvoidance.Default is internal, so configure it explicitly.
+            // This is what keeps the camera out of walls AND from dipping underground,
+            // especially important now that the far distance preset sits well behind the car.
+            var avoid = deoccluder.AvoidObstacles;
+            avoid.Enabled              = true;
+            avoid.CameraRadius         = 0.3f;
+            avoid.Strategy             = CinemachineDeoccluder.ObstacleAvoidance.ResolutionStrategy.PreserveCameraDistance;
+            avoid.MaximumEffort        = 4;
+            avoid.SmoothingTime        = 0f;
+            avoid.Damping              = 0.5f;
+            avoid.DampingWhenOccluded  = 0.1f;
+            deoccluder.AvoidObstacles  = avoid;
         }
 
         // ── 7. Finalize ──
@@ -286,6 +319,26 @@ public class ThirdPersonCameraController : NetworkBehaviour
             }
         }
 
+        // Camera distance cycling (V by default) — wraps around, persisted between sessions
+        var keyboard = UnityEngine.InputSystem.Keyboard.current;
+        if (keyboard != null && distancePresets != null && distancePresets.Length > 0)
+        {
+            var keyControl = keyboard[cycleDistanceKey];
+            if (keyControl != null && keyControl.wasPressedThisFrame)
+            {
+                _distanceIndex = (_distanceIndex + 1) % distancePresets.Length;
+                _targetRadius  = distancePresets[_distanceIndex];
+                SaveDistanceIndex(_distanceIndex);
+            }
+        }
+
+        // Ease the orbit radius toward the selected distance (Deoccluder still
+        // pulls it back in if the new distance would clip a wall or the ground)
+        if (orbitalFollow != null)
+        {
+            orbitalFollow.Radius = Mathf.Lerp(orbitalFollow.Radius, _targetRadius, distanceLerpSpeed * Time.deltaTime);
+        }
+
         // Speed FOV
         if (enableSpeedFOV && carRigidbody != null)
         {
@@ -295,5 +348,29 @@ public class ThirdPersonCameraController : NetworkBehaviour
             currentFOV = Mathf.Lerp(currentFOV, targetFOV, fovSmoothSpeed * Time.deltaTime);
             playerCamera.fieldOfView = currentFOV;
         }
+    }
+
+    // ──────────────────────────────────────────────
+    //  CAMERA DISTANCE HELPERS
+    // ──────────────────────────────────────────────
+
+    private int LoadDistanceIndex()
+    {
+        if (distancePresets == null || distancePresets.Length == 0) return 0;
+        int idx = PlayerPrefs.GetInt(PrefCamDistanceIndex, 0);
+        return Mathf.Clamp(idx, 0, distancePresets.Length - 1);
+    }
+
+    private void SaveDistanceIndex(int idx)
+    {
+        PlayerPrefs.SetInt(PrefCamDistanceIndex, idx);
+        PlayerPrefs.Save();
+    }
+
+    private float ResolveRadius(int idx)
+    {
+        if (distancePresets != null && idx >= 0 && idx < distancePresets.Length)
+            return distancePresets[idx];
+        return orbitRadius;
     }
 }

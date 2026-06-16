@@ -23,6 +23,10 @@ public class PlayerDeathHandler : NetworkBehaviour
     /// <summary>(respawnedPlayerNetId) — server only.</summary>
     public static event Action<uint> OnPlayerRespawned;
 
+    // Once the match has ended the death panel must never appear again —
+    // only the end-game screen should be visible.
+    private bool _matchEnded;
+
     // ── Lifecycle ───────────────────────────────────────────
 
     private void Awake()
@@ -56,6 +60,10 @@ public class PlayerDeathHandler : NetworkBehaviour
         if (isServer)
             OnPlayerDied?.Invoke(netIdentity.netId, killerNetId);
 
+        // Match is over: the end-game screen owns the UI now. Don't show death panel.
+        if (_matchEnded)
+            return;
+
         if (isLocalPlayer)
         {
             if (deathPanel != null)
@@ -83,6 +91,8 @@ public class PlayerDeathHandler : NetworkBehaviour
 
     private void HandleMatchEnded(uint _)
     {
+        _matchEnded = true;
+
         if (isLocalPlayer && deathPanel != null)
             deathPanel.SetActive(false);
     }
