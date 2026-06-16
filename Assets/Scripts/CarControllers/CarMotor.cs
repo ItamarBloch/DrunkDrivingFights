@@ -36,6 +36,10 @@ public class CarMotor : MonoBehaviour
     /// <summary>Current ground slope angle in degrees (0 = flat, 90 = vertical wall).</summary>
     public float SlopeAngle { get; private set; }
 
+    /// <summary>Averaged wheel-contact normal (world space). Defaults to up when airborne.
+    /// Independent of suspension travel, so it reflects terrain attitude — not body squat/dive.</summary>
+    public Vector3 GroundNormal { get; private set; } = Vector3.up;
+
     // ── Private State ───────────────────────────────────────
 
     private float _localForwardSpeed;
@@ -224,9 +228,16 @@ public class CarMotor : MonoBehaviour
         IsGrounded = grounded;
 
         if (hitCount > 0)
-            SlopeAngle = Vector3.Angle(normalSum / hitCount, Vector3.up);
+        {
+            Vector3 avgNormal = normalSum / hitCount;
+            GroundNormal = avgNormal.normalized;
+            SlopeAngle = Vector3.Angle(avgNormal, Vector3.up);
+        }
         else
+        {
+            GroundNormal = Vector3.up;
             SlopeAngle = 0f;
+        }
     }
 
     private float GetSlopeTorqueMultiplier()

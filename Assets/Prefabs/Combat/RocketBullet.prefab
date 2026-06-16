@@ -42,9 +42,7 @@ GameObject:
   - component: {fileID: 2069023436735630431}
   - component: {fileID: 5175625207051174396}
   - component: {fileID: 7883028644568623630}
-  - component: {fileID: 1920802482691958054}
   - component: {fileID: 4365894122101650836}
-  - component: {fileID: 9199086900276762849}
   m_Layer: 0
   m_Name: RocketBullet
   m_TagString: Untagged
@@ -117,23 +115,6 @@ SphereCollider:
   serializedVersion: 3
   m_Radius: 0.3
   m_Center: {x: 0, y: 0, z: 0}
---- !u!114 &1920802482691958054
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 4765077121572320767}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 9b91ecbcc199f4492b9a91e820070131, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Mirror::Mirror.NetworkIdentity
-  sceneId: 0
-  _assetId: 4065476692
-  serverOnly: 0
-  visibility: 0
-  hasSpawned: 0
 --- !u!114 &4365894122101650836
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -146,47 +127,9 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: f308b28536b7e0c44a752ef70f259788, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::Rocket
-  syncDirection: 0
-  syncMode: 0
-  syncInterval: 0
   combatSettings: {fileID: 11400000, guid: 00b620958a9ef1242af5cde6b2697715, type: 2}
   vfxReferences: {fileID: 11400000, guid: 08d5ab4b0bcd7f64f87f50bacbc14e31, type: 2}
-  soundRegistry: {fileID: 11400000, guid: a55d8b052540b5d4b9d608e3fb0ffd23, type: 2}
   trailAnchor: {fileID: 6436972122260176070}
---- !u!114 &9199086900276762849
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 4765077121572320767}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: a553cb17010b2403e8523b558bffbc14, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Mirror.Components::Mirror.NetworkTransformUnreliable
-  syncDirection: 0
-  syncMode: 1
-  syncInterval: 0
-  target: {fileID: 2069023436735630431}
-  syncPosition: 1
-  syncRotation: 0
-  syncScale: 0
-  onlySyncOnChange: 1
-  compressRotation: 1
-  interpolatePosition: 1
-  interpolateRotation: 0
-  interpolateScale: 0
-  coordinateSpace: 0
-  timelineOffset: 1
-  showGizmos: 0
-  showOverlay: 0
-  overlayColor: {r: 0, g: 0, b: 0, a: 0.5}
-  bufferResetMultiplier: 3
-  useFixedUpdate: 0
-  positionSensitivity: 0.01
-  rotationSensitivity: 0.01
-  scaleSensitivity: 0.01
 --- !u!1 &5249522744584729335
 GameObject:
   m_ObjectHideFlags: 0

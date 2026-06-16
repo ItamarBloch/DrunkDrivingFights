@@ -26,19 +26,32 @@ public class WeaponController : NetworkBehaviour
     [SerializeField] private LayerMask aimLayers = ~0;
 
     // ── Synced State ────────────────────────────────────────
+    // Ammo is the ONLY authoritative value we sync, and it changes only on
+    // discrete events (fire / reload-complete) — never per frame. The reload
+    // bar and ammo readout are driven entirely client-side (see _ui* fields);
+    // the server is the sole authority on whether a shot is actually allowed.
 
     [SyncVar(hook = nameof(OnAmmoChangedHook))]
     private int _currentAmmo;
 
-    [SyncVar] private bool _isReloading;
-    [SyncVar] private float _reloadProgress;
-
-    // ── Local State ─────────────────────────────────────────
+    // ── Server-Authoritative State (server-only, never synced per frame) ──
 
     private float _fireCooldownTimer;
-    private float _reloadTimer;
+    private bool  _serverReloading;
+    private float _serverReloadTimer;
     private Rigidbody _carRigidbody;
+    private CarMotor _carMotor;
     private bool _isDead;
+
+    // ── Client UI State (local player only, optimistic — not networked) ──
+    // We don't care if a client "fakes" its own HUD; the server re-validates
+    // every shot in CmdFire, so a lying UI can never actually fire illegally.
+
+    private int   _uiAmmo;
+    private bool  _uiReloading;
+    private float _uiReloadTimer;
+    private float _uiReloadProgress;
+    private float _uiCooldownTimer;
 
     [SyncVar] private bool _isFrozen;
 
@@ -59,16 +72,17 @@ public class WeaponController : NetworkBehaviour
 
     // ── Public ──────────────────────────────────────────────
 
-    public int CurrentAmmo => _currentAmmo;
+    public int CurrentAmmo => isLocalPlayer ? _uiAmmo : _currentAmmo;
     public int MaxAmmo => weaponSettings != null ? weaponSettings.maxAmmo : 0;
-    public bool IsReloading => _isReloading;
-    public float ReloadProgress => _reloadProgress;
+    public bool IsReloading => _uiReloading;
+    public float ReloadProgress => _uiReloadProgress;
 
     // ── Lifecycle ───────────────────────────────────────────
 
     private void Awake()
     {
         _carRigidbody = GetComponent<Rigidbody>();
+        _carMotor = GetComponent<CarMotor>();
 
         _fireAction = new InputAction("Fire", InputActionType.Button);
         _fireAction.AddBinding("<Mouse>/leftButton");
@@ -105,7 +119,10 @@ public class WeaponController : NetworkBehaviour
             Debug.LogWarning("[WeaponController] No MuzzlePoint assigned — created default.");
         }
 
-        OnAmmoChanged?.Invoke(_currentAmmo, MaxAmmo);
+        _uiAmmo = _currentAmmo;
+        _uiReloading = false;
+        _uiReloadProgress = 1f;
+        OnAmmoChanged?.Invoke(_uiAmmo, MaxAmmo);
     }
 
     private void OnDisable()
@@ -136,42 +153,28 @@ public class WeaponController : NetworkBehaviour
 
         if (_isDead)
         {
-            if (_isReloading)
-            {
-                _isReloading = false;
-                _reloadProgress = 0f;
-                RpcReloadProgress(false, 0f);
-            }
+            _serverReloading   = false;
+            _serverReloadTimer = 0f;
             return;
         }
 
-        if (_isReloading && weaponSettings != null)
-        {
-            _reloadTimer -= Time.deltaTime;
+        if (!_serverReloading || weaponSettings == null) return;
 
-            if (weaponSettings.reloadPerRocket)
-            {
-                _reloadProgress = 1f - (_reloadTimer / weaponSettings.reloadTime);
-                if (_reloadTimer <= 0f)
-                {
-                    _currentAmmo++;
-                    if (_currentAmmo >= weaponSettings.maxAmmo)
-                    { _isReloading = false; _reloadProgress = 0f; }
-                    else
-                    { _reloadTimer = weaponSettings.reloadTime; }
-                }
-            }
-            else
-            {
-                _reloadProgress = 1f - (_reloadTimer / weaponSettings.reloadTime);
-                if (_reloadTimer <= 0f)
-                {
-                    _currentAmmo = weaponSettings.maxAmmo;
-                    _isReloading = false;
-                    _reloadProgress = 0f;
-                }
-            }
-            RpcReloadProgress(_isReloading, _reloadProgress);
+        // Authoritative reload timer. No RPCs, no per-frame SyncVars — _currentAmmo
+        // only changes when a reload actually completes (a discrete event).
+        _serverReloadTimer -= Time.deltaTime;
+        if (_serverReloadTimer > 0f) return;
+
+        if (weaponSettings.reloadPerRocket)
+        {
+            _currentAmmo++;
+            if (_currentAmmo >= weaponSettings.maxAmmo) _serverReloading = false;
+            else _serverReloadTimer = weaponSettings.reloadTime;
+        }
+        else
+        {
+            _currentAmmo = weaponSettings.maxAmmo;
+            _serverReloading = false;
         }
     }
 
@@ -179,7 +182,25 @@ public class WeaponController : NetworkBehaviour
 
     private void LocalPlayerUpdate()
     {
-        if (weaponSettings == null || _isDead || _isFrozen) return;
+        if (weaponSettings == null) return;
+        float dt = Time.deltaTime;
+
+        // Dead → cancel any local reload bar and take no input.
+        if (_isDead)
+        {
+            if (_uiReloading)
+            {
+                _uiReloading = false;
+                _uiReloadProgress = 0f;
+                OnReloadStateChanged?.Invoke(false, 0f);
+            }
+            return;
+        }
+
+        if (_uiCooldownTimer > 0f) _uiCooldownTimer -= dt;
+        TickLocalReload(dt);
+
+        if (_isFrozen) return;
 
         bool firePressed   = _useBindingManager
             ? InputBindingManager.singleton.WasPressedThisFrame(InputBindingManager.GameAction.WeaponFire)
@@ -189,17 +210,91 @@ public class WeaponController : NetworkBehaviour
             ? InputBindingManager.singleton.WasPressedThisFrame(InputBindingManager.GameAction.WeaponReload)
             : _reloadAction.WasPerformedThisFrame();
 
-        if (firePressed && _currentAmmo > 0 && !_isReloading)
-            CmdFire(GetAimDirection());
+        if (firePressed && _uiAmmo > 0 && !_uiReloading && _uiCooldownTimer <= 0f)
+        {
+            // Optimistic local feedback — server re-validates the shot in CmdFire.
+            _uiAmmo--;
+            _uiCooldownTimer = weaponSettings.fireCooldown;
+            OnAmmoChanged?.Invoke(_uiAmmo, weaponSettings.maxAmmo);
+            OnShotFired?.Invoke();
+            if (_uiAmmo <= 0) StartLocalReload();
+            // Send the CLIENT's muzzle position too: under client-predicted movement the
+            // owner's car is ahead of the server's authoritative car by the input latency,
+            // so spawning from the server muzzle would launch the rocket from where the
+            // car USED to be. The server spawns from this reported origin (sanity-clamped).
+            Vector3 muzzlePos = GetMuzzlePosition();
+            Vector3 aimDir    = GetAimDirection();
+            // Fire our own visual rocket this frame — zero network delay. The server spawns
+            // an invisible hit-detector and tells the OTHER clients to spawn their visuals.
+            SpawnVisualRocket(muzzlePos, aimDir, LocalCarVelocity(), netIdentity.netId);
+            CmdFire(muzzlePos, aimDir);
+        }
 
-        if (reloadPressed && _currentAmmo < weaponSettings.maxAmmo && !_isReloading)
+        if (reloadPressed && _uiAmmo < weaponSettings.maxAmmo && !_uiReloading)
+        {
+            StartLocalReload();
             CmdReload();
+        }
+    }
+
+    /// <summary>Advances the purely-local reload bar (UI only — never networked).</summary>
+    private void TickLocalReload(float dt)
+    {
+        if (!_uiReloading) return;
+
+        _uiReloadTimer -= dt;
+        _uiReloadProgress = Mathf.Clamp01(1f - _uiReloadTimer / weaponSettings.reloadTime);
+
+        if (_uiReloadTimer > 0f)
+        {
+            OnReloadStateChanged?.Invoke(true, _uiReloadProgress);
+            return;
+        }
+
+        if (weaponSettings.reloadPerRocket)
+        {
+            _uiAmmo = Mathf.Min(_uiAmmo + 1, weaponSettings.maxAmmo);
+            if (_uiAmmo >= weaponSettings.maxAmmo)
+            {
+                _uiReloading = false;
+                _uiReloadProgress = 1f;
+            }
+            else
+            {
+                _uiReloadTimer = weaponSettings.reloadTime;
+            }
+        }
+        else
+        {
+            _uiAmmo = weaponSettings.maxAmmo;
+            _uiReloading = false;
+            _uiReloadProgress = 1f;
+        }
+
+        OnAmmoChanged?.Invoke(_uiAmmo, weaponSettings.maxAmmo);
+        OnReloadStateChanged?.Invoke(_uiReloading, _uiReloadProgress);
+    }
+
+    private void StartLocalReload()
+    {
+        _uiReloading = true;
+        _uiReloadTimer = weaponSettings.reloadTime;
+        _uiReloadProgress = 0f;
+        OnReloadStateChanged?.Invoke(true, 0f);
+    }
+
+    /// <summary>The muzzle world position as the CLIENT sees it (matches the local predicted car).</summary>
+    private Vector3 GetMuzzlePosition()
+    {
+        return muzzlePoint != null
+            ? muzzlePoint.position
+            : transform.position + transform.forward * 3f + transform.up * 1.5f;
     }
 
     private Vector3 GetAimDirection()
     {
         if (!aimFromCamera || Camera.main == null)
-            return muzzlePoint != null ? muzzlePoint.forward : transform.forward;
+            return GetStabilizedMuzzleForward();
 
         Ray ray = Camera.main.ViewportPointToRay(new Vector3(0.5f, 0.5f, 0f));
         Vector3 target = Physics.Raycast(ray, out RaycastHit hit, aimRaycastDistance, aimLayers)
@@ -209,61 +304,125 @@ public class WeaponController : NetworkBehaviour
         return (target - origin).normalized;
     }
 
+    /// <summary>
+    /// The muzzle's forward, stabilized against suspension squat/dive. When grounded we
+    /// project it onto the actual wheel-contact ground plane, so accel/brake body wobble
+    /// cancels out while genuine terrain slope is kept. Airborne → the raw muzzle forward
+    /// (true car attitude). See CarMotor.GroundNormal.
+    /// </summary>
+    private Vector3 GetStabilizedMuzzleForward()
+    {
+        Vector3 raw = muzzlePoint != null ? muzzlePoint.forward : transform.forward;
+
+        // CarMotor is added at runtime by CarController, so resolve it lazily.
+        if (_carMotor == null) _carMotor = GetComponent<CarMotor>();
+
+        if (_carMotor != null && _carMotor.IsGrounded)
+        {
+            Vector3 flat = Vector3.ProjectOnPlane(raw, _carMotor.GroundNormal);
+            if (flat.sqrMagnitude > 1e-4f) return flat.normalized;
+        }
+
+        return raw;
+    }
+
     // ── Commands ────────────────────────────────────────────
 
     [Command]
-    private void CmdFire(Vector3 aimDirection)
+    private void CmdFire(Vector3 clientMuzzlePosition, Vector3 aimDirection)
     {
-        if (weaponSettings == null || _currentAmmo <= 0 || _isReloading) return;
+        // Authoritative validation: the client's UI is optimistic and untrusted,
+        // so we re-check ammo, reload state and cooldown here before spawning.
+        if (weaponSettings == null || _currentAmmo <= 0 || _serverReloading) return;
         if (_fireCooldownTimer > 0f || _isDead) return;
 
         _currentAmmo--;
         _fireCooldownTimer = weaponSettings.fireCooldown;
 
-        if (_currentAmmo <= 0) StartReload();
+        if (_currentAmmo <= 0) StartServerReload();
 
-        SpawnRocket(aimDirection);
+        Vector3 spawnPos = SanitizeMuzzlePosition(clientMuzzlePosition);
+        Vector3 vel = LocalCarVelocity();
+
+        // Authoritative invisible rocket: damage only, no visuals.
+        SpawnServerHitRocket(spawnPos, aimDirection, vel);
+
+        // Tell every OTHER client to spawn their own visual rocket (the shooter already
+        // spawned theirs locally on fire, so they ignore this).
+        RpcSpawnVisualRocket(spawnPos, aimDirection, vel, netIdentity.netId);
+
         RpcOnShotFired();
+    }
+
+    /// <summary>
+    /// Trust the client's reported muzzle origin only within a generous radius of the
+    /// server's car (covers the legit prediction-vs-server offset at full speed). A
+    /// wildly out-of-range value (a spoofing client) falls back to the server muzzle.
+    /// </summary>
+    [Server]
+    private Vector3 SanitizeMuzzlePosition(Vector3 clientMuzzlePosition)
+    {
+        Vector3 serverMuzzle = GetMuzzlePosition();
+        const float maxOriginOffset = 15f; // metres; > worst-case input-latency * top speed
+        return (clientMuzzlePosition - serverMuzzle).sqrMagnitude <= maxOriginOffset * maxOriginOffset
+            ? clientMuzzlePosition
+            : serverMuzzle;
     }
 
     [Command]
     private void CmdReload()
     {
         if (weaponSettings == null || _isDead) return;
-        if (_currentAmmo >= weaponSettings.maxAmmo || _isReloading) return;
-        StartReload();
+        if (_currentAmmo >= weaponSettings.maxAmmo || _serverReloading) return;
+        StartServerReload();
     }
 
     [Server]
-    private void StartReload()
+    private void StartServerReload()
     {
-        _isReloading = true;
-        _reloadProgress = 0f;
-        _reloadTimer = weaponSettings.reloadTime;
+        _serverReloading = true;
+        _serverReloadTimer = weaponSettings.reloadTime;
     }
 
-    [Server]
-    private void SpawnRocket(Vector3 aimDirection)
-    {
-        if (rocketPrefab == null) return;
+    /// <summary>The shooter's current car velocity (predicted on the owner, authoritative on the server).</summary>
+    private Vector3 LocalCarVelocity()
+        => _carRigidbody != null ? _carRigidbody.linearVelocity : Vector3.zero;
 
-        Vector3 spawnPos = muzzlePoint != null
-            ? muzzlePoint.position
-            : transform.position + transform.forward * 3f + transform.up * 1.5f;
+    /// <summary>Server: spawn the invisible authoritative rocket that deals the real damage.</summary>
+    [Server]
+    private void SpawnServerHitRocket(Vector3 spawnPos, Vector3 aimDirection, Vector3 shooterVelocity)
+        => SpawnLocalRocket(Rocket.RocketMode.ServerHit, spawnPos, aimDirection, shooterVelocity, netIdentity.netId);
+
+    /// <summary>
+    /// Instantiate a non-networked rocket on THIS peer only. Visual rockets show the
+    /// mesh/trail/whoosh and explode cosmetically; the server's hit rocket is invisible
+    /// and only deals damage. See Rocket for the mode behaviour.
+    /// </summary>
+    private void SpawnVisualRocket(Vector3 spawnPos, Vector3 aimDirection, Vector3 shooterVelocity, uint ownerNetId)
+        => SpawnLocalRocket(Rocket.RocketMode.Visual, spawnPos, aimDirection, shooterVelocity, ownerNetId);
+
+    private void SpawnLocalRocket(Rocket.RocketMode mode, Vector3 spawnPos,
+        Vector3 aimDirection, Vector3 shooterVelocity, uint ownerNetId)
+    {
+        if (rocketPrefab == null || weaponSettings == null) return;
 
         GameObject rocketObj = Instantiate(rocketPrefab, spawnPos, Quaternion.LookRotation(aimDirection));
-        NetworkServer.Spawn(rocketObj);
-
         Rocket rocket = rocketObj.GetComponent<Rocket>();
-        if (rocket != null)
-        {
-            Vector3 vel = _carRigidbody != null ? _carRigidbody.linearVelocity : Vector3.zero;
-            rocket.Initialize(weaponSettings, aimDirection, vel, netIdentity.netId);
-        }
+        if (rocket == null) { Destroy(rocketObj); return; }
 
+        rocket.Launch(mode, weaponSettings, aimDirection, shooterVelocity, ownerNetId);
     }
 
     // ── RPCs ────────────────────────────────────────────────
+
+    [ClientRpc]
+    private void RpcSpawnVisualRocket(Vector3 spawnPos, Vector3 aimDirection,
+        Vector3 shooterVelocity, uint ownerNetId)
+    {
+        // The shooter already fired their own predicted visual rocket on the input frame.
+        if (isLocalPlayer) return;
+        SpawnVisualRocket(spawnPos, aimDirection, shooterVelocity, ownerNetId);
+    }
 
     [ClientRpc]
     private void RpcOnShotFired()
@@ -273,14 +432,20 @@ public class WeaponController : NetworkBehaviour
         if (isLocalPlayer) OnShotFired?.Invoke();
     }
 
-    [ClientRpc]
-    private void RpcReloadProgress(bool reloading, float progress)
-    {
-        OnReloadStateChanged?.Invoke(reloading, progress);
-    }
-
     private void OnAmmoChangedHook(int oldAmmo, int newAmmo)
     {
+        // Reconcile the optimistic local UI to the server's authoritative ammo.
+        // Fires only on discrete ammo events (fire / reload-complete), not per frame.
+        if (isLocalPlayer)
+        {
+            _uiAmmo = newAmmo;
+            if (newAmmo >= MaxAmmo)
+            {
+                _uiReloading = false;
+                _uiReloadProgress = 1f;
+                OnReloadStateChanged?.Invoke(false, 1f);
+            }
+        }
         if (weaponSettings != null) OnAmmoChanged?.Invoke(newAmmo, weaponSettings.maxAmmo);
     }
 
