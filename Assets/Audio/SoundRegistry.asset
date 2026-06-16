@@ -23,7 +23,7 @@ MonoBehaviour:
     maxDistance: 80
   - key: explosion
     clip: {fileID: 8300000, guid: 1448a68ebb5e5f84e8eb76d72df9c0eb, type: 3}
-    volume: 0.9
+    volume: 1
     minPitch: 0.85
     maxPitch: 1.15
     spatialBlend: 0.8
@@ -31,7 +31,7 @@ MonoBehaviour:
     maxDistance: 10
   - key: engine_loop
     clip: {fileID: 8300000, guid: cd0e08abc601d854099218cd61f50fea, type: 3}
-    volume: 0.4
+    volume: 0.2
     minPitch: 0.6
     maxPitch: 1.4
     spatialBlend: 0.8
