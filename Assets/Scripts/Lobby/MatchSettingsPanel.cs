@@ -40,7 +40,12 @@ public class MatchSettingsPanel : MonoBehaviour
         MatchCreationData.RocketDamage = MatchCreationData.RocketDamageOptions[index];
         PlayerPrefs.SetInt("MatchRocketDamage", MatchCreationData.RocketDamage);
         if (rocketDamageValueText != null)
-            rocketDamageValueText.text = MatchCreationData.RocketDamage.ToString();
+        {
+            // Show the value as the damage multiplier it actually represents
+            // (e.g. 60 / baseline 60 = 1×, 90 / 60 = 1.5×).
+            float multiplier = MatchCreationData.RocketDamage / (float)MatchCreationData.BaselineDamage;
+            rocketDamageValueText.text = "×" + multiplier.ToString("0.##");
+        }
     }
 
     private void LoadSettings()
