@@ -40,6 +40,7 @@ public class WeaponController : NetworkBehaviour
     private bool  _serverReloading;
     private float _serverReloadTimer;
     private Rigidbody _carRigidbody;
+    private CarMotor _carMotor;
     private bool _isDead;
 
     // ── Client UI State (local player only, optimistic — not networked) ──
@@ -81,6 +82,7 @@ public class WeaponController : NetworkBehaviour
     private void Awake()
     {
         _carRigidbody = GetComponent<Rigidbody>();
+        _carMotor = GetComponent<CarMotor>();
 
         _fireAction = new InputAction("Fire", InputActionType.Button);
         _fireAction.AddBinding("<Mouse>/leftButton");
@@ -220,7 +222,12 @@ public class WeaponController : NetworkBehaviour
             // owner's car is ahead of the server's authoritative car by the input latency,
             // so spawning from the server muzzle would launch the rocket from where the
             // car USED to be. The server spawns from this reported origin (sanity-clamped).
-            CmdFire(GetMuzzlePosition(), GetAimDirection());
+            Vector3 muzzlePos = GetMuzzlePosition();
+            Vector3 aimDir    = GetAimDirection();
+            // Fire our own visual rocket this frame — zero network delay. The server spawns
+            // an invisible hit-detector and tells the OTHER clients to spawn their visuals.
+            SpawnVisualRocket(muzzlePos, aimDir, LocalCarVelocity(), netIdentity.netId);
+            CmdFire(muzzlePos, aimDir);
         }
 
         if (reloadPressed && _uiAmmo < weaponSettings.maxAmmo && !_uiReloading)
@@ -287,7 +294,7 @@ public class WeaponController : NetworkBehaviour
     private Vector3 GetAimDirection()
     {
         if (!aimFromCamera || Camera.main == null)
-            return muzzlePoint != null ? muzzlePoint.forward : transform.forward;
+            return GetStabilizedMuzzleForward();
 
         Ray ray = Camera.main.ViewportPointToRay(new Vector3(0.5f, 0.5f, 0f));
         Vector3 target = Physics.Raycast(ray, out RaycastHit hit, aimRaycastDistance, aimLayers)
@@ -295,6 +302,28 @@ public class WeaponController : NetworkBehaviour
 
         Vector3 origin = muzzlePoint != null ? muzzlePoint.position : transform.position;
         return (target - origin).normalized;
+    }
+
+    /// <summary>
+    /// The muzzle's forward, stabilized against suspension squat/dive. When grounded we
+    /// project it onto the actual wheel-contact ground plane, so accel/brake body wobble
+    /// cancels out while genuine terrain slope is kept. Airborne → the raw muzzle forward
+    /// (true car attitude). See CarMotor.GroundNormal.
+    /// </summary>
+    private Vector3 GetStabilizedMuzzleForward()
+    {
+        Vector3 raw = muzzlePoint != null ? muzzlePoint.forward : transform.forward;
+
+        // CarMotor is added at runtime by CarController, so resolve it lazily.
+        if (_carMotor == null) _carMotor = GetComponent<CarMotor>();
+
+        if (_carMotor != null && _carMotor.IsGrounded)
+        {
+            Vector3 flat = Vector3.ProjectOnPlane(raw, _carMotor.GroundNormal);
+            if (flat.sqrMagnitude > 1e-4f) return flat.normalized;
+        }
+
+        return raw;
     }
 
     // ── Commands ────────────────────────────────────────────
@@ -312,7 +341,16 @@ public class WeaponController : NetworkBehaviour
 
         if (_currentAmmo <= 0) StartServerReload();
 
-        SpawnRocket(SanitizeMuzzlePosition(clientMuzzlePosition), aimDirection);
+        Vector3 spawnPos = SanitizeMuzzlePosition(clientMuzzlePosition);
+        Vector3 vel = LocalCarVelocity();
+
+        // Authoritative invisible rocket: damage only, no visuals.
+        SpawnServerHitRocket(spawnPos, aimDirection, vel);
+
+        // Tell every OTHER client to spawn their own visual rocket (the shooter already
+        // spawned theirs locally on fire, so they ignore this).
+        RpcSpawnVisualRocket(spawnPos, aimDirection, vel, netIdentity.netId);
+
         RpcOnShotFired();
     }
 
@@ -346,24 +384,45 @@ public class WeaponController : NetworkBehaviour
         _serverReloadTimer = weaponSettings.reloadTime;
     }
 
+    /// <summary>The shooter's current car velocity (predicted on the owner, authoritative on the server).</summary>
+    private Vector3 LocalCarVelocity()
+        => _carRigidbody != null ? _carRigidbody.linearVelocity : Vector3.zero;
+
+    /// <summary>Server: spawn the invisible authoritative rocket that deals the real damage.</summary>
     [Server]
-    private void SpawnRocket(Vector3 spawnPos, Vector3 aimDirection)
+    private void SpawnServerHitRocket(Vector3 spawnPos, Vector3 aimDirection, Vector3 shooterVelocity)
+        => SpawnLocalRocket(Rocket.RocketMode.ServerHit, spawnPos, aimDirection, shooterVelocity, netIdentity.netId);
+
+    /// <summary>
+    /// Instantiate a non-networked rocket on THIS peer only. Visual rockets show the
+    /// mesh/trail/whoosh and explode cosmetically; the server's hit rocket is invisible
+    /// and only deals damage. See Rocket for the mode behaviour.
+    /// </summary>
+    private void SpawnVisualRocket(Vector3 spawnPos, Vector3 aimDirection, Vector3 shooterVelocity, uint ownerNetId)
+        => SpawnLocalRocket(Rocket.RocketMode.Visual, spawnPos, aimDirection, shooterVelocity, ownerNetId);
+
+    private void SpawnLocalRocket(Rocket.RocketMode mode, Vector3 spawnPos,
+        Vector3 aimDirection, Vector3 shooterVelocity, uint ownerNetId)
     {
-        if (rocketPrefab == null) return;
+        if (rocketPrefab == null || weaponSettings == null) return;
 
         GameObject rocketObj = Instantiate(rocketPrefab, spawnPos, Quaternion.LookRotation(aimDirection));
-        NetworkServer.Spawn(rocketObj);
-
         Rocket rocket = rocketObj.GetComponent<Rocket>();
-        if (rocket != null)
-        {
-            Vector3 vel = _carRigidbody != null ? _carRigidbody.linearVelocity : Vector3.zero;
-            rocket.Initialize(weaponSettings, aimDirection, vel, netIdentity.netId);
-        }
+        if (rocket == null) { Destroy(rocketObj); return; }
 
+        rocket.Launch(mode, weaponSettings, aimDirection, shooterVelocity, ownerNetId);
     }
 
     // ── RPCs ────────────────────────────────────────────────
+
+    [ClientRpc]
+    private void RpcSpawnVisualRocket(Vector3 spawnPos, Vector3 aimDirection,
+        Vector3 shooterVelocity, uint ownerNetId)
+    {
+        // The shooter already fired their own predicted visual rocket on the input frame.
+        if (isLocalPlayer) return;
+        SpawnVisualRocket(spawnPos, aimDirection, shooterVelocity, ownerNetId);
+    }
 
     [ClientRpc]
     private void RpcOnShotFired()
