@@ -23,7 +23,6 @@ public class GameNetworkRoomManager : NetworkRoomManager
     [HideInInspector] public string roomCode = "";
     [HideInInspector] public string roomPassword = "";
 
-    private GameRoomDiscovery discovery;
     private PasswordAuthenticator passwordAuthenticator;
     private GlobalMatchmakingClient globalClient;
     private kcp2k.KcpTransport kcpTransport;
@@ -84,11 +83,6 @@ public class GameNetworkRoomManager : NetworkRoomManager
         if (relayTransport == null)
             relayTransport = gameObject.AddComponent<RelayTransport>();
 
-        // Discovery — LAN broadcast
-        discovery = GetComponent<GameRoomDiscovery>();
-        if (discovery == null)
-            discovery = gameObject.AddComponent<GameRoomDiscovery>();
-
         // Global matchmaking client — HTTP-based, works over internet
         globalClient = GetComponent<GlobalMatchmakingClient>();
         if (globalClient == null)
@@ -138,7 +132,6 @@ public class GameNetworkRoomManager : NetworkRoomManager
     {
         if (NetworkServer.active)
         {
-            discovery.StopAdvertising();
             globalClient.UnregisterSession();
             StopHost();
         }
@@ -210,9 +203,6 @@ public class GameNetworkRoomManager : NetworkRoomManager
         return sb.ToString();
     }
 
-    private static int HashPassword(string pwd) =>
-        string.IsNullOrEmpty(pwd) ? 0 : pwd.GetHashCode();
-
     public void JoinRoom(string address, int port = 7777, string password = "")
     {
         if (NetworkClient.active && !NetworkServer.active)
@@ -281,7 +271,6 @@ public class GameNetworkRoomManager : NetworkRoomManager
     {
         if (IsOwner)
         {
-            discovery.StopAdvertising();
             globalClient.UnregisterSession();
             StopHost();
         }
@@ -301,7 +290,6 @@ public class GameNetworkRoomManager : NetworkRoomManager
     {
         if (IsOwner)
         {
-            discovery.StopAdvertising();
             globalClient.UnregisterSession();
             ServerChangeScene(RoomScene);
         }
@@ -320,7 +308,6 @@ public class GameNetworkRoomManager : NetworkRoomManager
         if (CurrentPlayerCount < 1) return;
 
         OnGameStarting?.Invoke();
-        discovery.StopAdvertising();
         globalClient.UnregisterSession();
 
         // We force-start from the owner button instead of going through Mirror's
@@ -348,29 +335,10 @@ public class GameNetworkRoomManager : NetworkRoomManager
         roomSlots.Clear();
 
         base.OnRoomStartServer();
-        Debug.Log("[Lobby] Server started — beginning LAN advertisement");
+        Debug.Log("[Lobby] Server started");
 
-        bool hasPassword = !string.IsNullOrEmpty(roomPassword);
-        int port = GetGamePort();
-
-        // LAN: UDP broadcast on local network (non-fatal — relay rooms work without LAN)
-        try
-        {
-            discovery?.AdvertiseRoom(roomName, maxConnections, selectedMap,
-                hasPassword, HashPassword(roomPassword), roomCode);
-        }
-        catch (System.Net.Sockets.SocketException e)
-        {
-            Debug.LogWarning($"[Lobby] LAN advertisement failed (port in use): {e.Message}");
-        }
-
-        // Global: register with the central matchmaking server (includes relay join code)
-        globalClient?.RegisterSession(
-            roomName, maxConnections, selectedMap,
-            hasPassword, roomCode, port, _pendingRelayJoinCode,
-            success => Debug.Log(success
-                ? "[Lobby] Globally registered"
-                : "[Lobby] Global registration failed — room is LAN-only"));
+        // Register with the central matchmaking server (includes relay join code).
+        RegisterRoomGlobally();
     }
 
     public override void OnRoomServerConnect(NetworkConnectionToClient conn)
@@ -454,9 +422,18 @@ public class GameNetworkRoomManager : NetworkRoomManager
     public override void OnRoomServerSceneChanged(string sceneName)
     {
         base.OnRoomServerSceneChanged(sceneName);
-        // Randomise spawn order once per match, before any player is spawned.
         if (sceneName != RoomScene)
+        {
+            // Randomise spawn order once per match, before any player is spawned.
             SpawnPoint.ShuffleForMatch();
+        }
+        else
+        {
+            // Back in the lobby after a match (ReturnToLobby unregistered the room
+            // before the scene change). Re-advertise so the still-open room shows up
+            // in Browse Rooms again. Guarded against duplicates by IsRegistered.
+            RegisterRoomGlobally();
+        }
     }
 
     public override void OnRoomServerPlayersReady()
@@ -507,49 +484,44 @@ public class GameNetworkRoomManager : NetworkRoomManager
         OnJoinFailed?.Invoke($"Connection failed: {reason}");
     }
 
-    // ─── Room List (LAN + Global merged) ──────────────────────────
+    // ─── Room List (Global matchmaking server) ────────────────────
 
     /// <summary>
-    /// Searches for rooms on both LAN (UDP broadcast) and the global matchmaking server
-    /// simultaneously, merges the results (deduplicated by address:port), and calls
-    /// <paramref name="callback"/> when both sources have responded.
-    ///
-    /// LAN results take priority in the merge so locally-discovered data is always current.
-    /// The callback is guaranteed to be called exactly once.
+    /// Fetches the list of joinable rooms from the global matchmaking server.
+    /// (LAN discovery was removed — the server is the single source of truth, which
+    /// matches how real remote clients see the game.)
     /// </summary>
     public void RefreshRoomList(Action<List<DiscoveredRoom>> callback)
     {
-        // If global matchmaking is not configured, use LAN only
         if (globalClient == null || !globalClient.IsConfigured)
         {
-            discovery.FindRooms(callback);
+            Debug.LogWarning("[Lobby] Global matchmaking not configured — no rooms to list");
+            callback?.Invoke(new List<DiscoveredRoom>());
             return;
         }
 
-        List<DiscoveredRoom> lanResults    = null;
-        List<DiscoveredRoom> globalResults = null;
-        bool callbackFired = false;
+        globalClient.FetchSessions(callback);
+    }
 
-        void TryMergeAndReturn()
-        {
-            if (callbackFired) return;
-            if (lanResults == null || globalResults == null) return;
-            callbackFired = true;
+    /// <summary>
+    /// Registers the current room with the global matchmaking server so it appears in
+    /// Browse Rooms. Safe to call multiple times — skips if already registered, so the
+    /// initial host start and the return-to-lobby re-advertise never create duplicates.
+    /// </summary>
+    private void RegisterRoomGlobally()
+    {
+        if (globalClient == null || !globalClient.IsConfigured) return;
+        if (globalClient.IsRegistered) return;
 
-            // Merge: key = "address:port". LAN data wins (more accurate for nearby sessions).
-            var merged = new Dictionary<string, DiscoveredRoom>();
-            foreach (var r in globalResults)
-                merged[$"{r.address}:{r.port}"] = r;
-            foreach (var r in lanResults)
-                merged[$"{r.address}:{r.port}"] = r;
+        bool hasPassword = !string.IsNullOrEmpty(roomPassword);
+        int port = GetGamePort();
 
-            var list = merged.Values.ToList();
-            Debug.Log($"[Lobby] Room list refreshed — {lanResults.Count} LAN, {globalResults.Count} global, {list.Count} unique");
-            callback?.Invoke(list);
-        }
-
-        discovery.FindRooms(rooms    => { lanResults    = rooms; TryMergeAndReturn(); });
-        globalClient.FetchSessions(rooms => { globalResults = rooms; TryMergeAndReturn(); });
+        globalClient.RegisterSession(
+            roomName, maxConnections, selectedMap,
+            hasPassword, roomCode, port, _pendingRelayJoinCode,
+            success => Debug.Log(success
+                ? "[Lobby] Globally registered"
+                : "[Lobby] Global registration failed"));
     }
 
     // ─── Helpers ──────────────────────────────────────────────────
