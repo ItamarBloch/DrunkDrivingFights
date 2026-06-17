@@ -11,8 +11,8 @@ using UnityEngine.Networking;
 /// sends a heartbeat every <heartbeatInterval> seconds, and unregisters on stop.
 ///
 /// When searching: fetches the list of active sessions and returns them as
-/// DiscoveredRoom objects — the same format used by LAN discovery — so
-/// GameNetworkRoomManager can merge both sources transparently.
+/// DiscoveredRoom objects for GameNetworkRoomManager. This server is the single
+/// source of truth for joinable rooms (LAN discovery was removed).
 ///
 /// Architecture:
 ///   Host  → POST   /sessions          (register)
@@ -270,6 +270,29 @@ public class GlobalMatchmakingClient : MonoBehaviour
         Debug.Log($"[Global] Fetched {rooms.Count} global session(s)");
         callback?.Invoke(rooms);
     }
+}
+
+// ── Discovered room ───────────────────────────────────────────────────────────
+
+/// <summary>
+/// A joinable room returned by the global matchmaking server. This used to be
+/// shared with LAN discovery; LAN has been removed, so the global client is now
+/// the sole producer of these.
+/// </summary>
+[Serializable]
+public class DiscoveredRoom
+{
+    public string roomName;
+    public string address;
+    public int port;
+    public int currentPlayers;
+    public int maxPlayers;
+    public string mapName;
+    public long serverId;
+    public DateTime lastSeen;
+    public bool hasPassword;
+    public string roomCode;
+    public string relayJoinCode;
 }
 
 // ── JSON DTOs (kept internal to this file) ────────────────────────────────────

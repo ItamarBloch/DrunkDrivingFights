@@ -89,8 +89,16 @@ public class LobbyUIController : MonoBehaviour
     [SerializeField] private Button directConnectButton;
     [SerializeField] private Button directConnectToggleButton;
 
+    // ── Welcome Message ───────────────────────────────────────────────────────
+    [Header("=== WELCOME MESSAGE ===")]
+    [SerializeField] private GameObject welcomeMessagePanel; // assign WelcomeMessagePrefab
+    [SerializeField] private Button welcomeCloseButton;      // assign CloseButton
+
     // ── State ─────────────────────────────────────────────────────────────────
     private enum Screen { MainMenu, QuickMatchSearch, MatchBrowser, CreateMatch, MatchLobby, Options }
+
+    // Welcome popup is shown only once per app launch, not on every return to the lobby.
+    private static bool _welcomeShown = false;
     private GameNetworkRoomManager manager;
     private bool playSubMenuOpen = false;
     private Coroutine quickMatchCoroutine;
@@ -123,6 +131,7 @@ public class LobbyUIController : MonoBehaviour
         SubscribeEvents();
         ShowScreen(Screen.MainMenu);
         SetPlaySubMenu(false);
+        ShowWelcomeMessage();
 
         if (PlayerPrefs.GetInt("PendingQuickMatch", 0) == 1)
         {
@@ -181,8 +190,30 @@ public class LobbyUIController : MonoBehaviour
             passwordCreateInput.characterLimit = 10;
     }
 
+    /// <summary>
+    /// Shows the welcome popup once per app launch. The static flag keeps it from
+    /// re-appearing every time the player returns to the lobby after a match.
+    /// </summary>
+    private void ShowWelcomeMessage()
+    {
+        if (welcomeMessagePanel == null) return;
+
+        bool show = !_welcomeShown;
+        _welcomeShown = true;
+        welcomeMessagePanel.SetActive(show);
+    }
+
+    private void CloseWelcomeMessage()
+    {
+        if (welcomeMessagePanel != null)
+            welcomeMessagePanel.SetActive(false);
+    }
+
     private void WireButtons()
     {
+        // Welcome message
+        welcomeCloseButton?.onClick.AddListener(CloseWelcomeMessage);
+
         // Main menu
         playButton?.onClick.AddListener(TogglePlaySubMenu);
         optionsButton?.onClick.AddListener(() => ShowScreen(Screen.Options));
@@ -334,13 +365,13 @@ public class LobbyUIController : MonoBehaviour
     //}
 
     /// <summary>
-    /// Continuously searches LAN + global servers for an available match.
+    /// Continuously queries the global matchmaking server for an available match.
     ///
     /// Flow per iteration:
-    ///   1. Refresh room list (LAN broadcast + HTTP fetch, ~3-4s)
+    ///   1. Refresh room list (HTTP fetch from the matchmaking server)
     ///   2. Filter: not full, not password protected
-    ///   3. For each candidate, attempt to join and wait for success or failure
-    ///   4. If all attempts fail or no rooms found → wait 5s → repeat from step 1
+    ///   3. Join the first candidate (via relay)
+    ///   4. If none found → wait 5s → repeat from step 1
     ///
     /// Stops when: player cancels, connection succeeds, or timer hits 99:59.
     /// </summary>
@@ -349,9 +380,8 @@ public class LobbyUIController : MonoBehaviour
         const float maxTime = 99 * 60f;
         float elapsed = 0f;
         float nextScanAt = 5f;
-        bool localhostProbed = false;
 
-        // Kick off an immediate LAN scan.
+        // Kick off an immediate scan.
         manager.RefreshRoomList(TryJoinFromQuickMatch);
 
         while (quickMatchActive && elapsed < maxTime)
@@ -369,20 +399,7 @@ public class LobbyUIController : MonoBehaviour
             // Successfully connected — done.
             if (NetworkClient.isConnected) { quickMatchActive = false; yield break; }
 
-            // Localhost probe once at ~4s (LAN broadcast doesn't loop back on Windows).
-            if (!localhostProbed && elapsed >= 4f && !NetworkClient.active)
-            {
-                localhostProbed = true;
-                if (quickMatchStatusText != null) quickMatchStatusText.text = "Trying local connection...";
-                manager.JoinRoom("localhost", 7777);
-            }
-            else if (localhostProbed && elapsed >= 7f && quickMatchStatusText != null
-                     && quickMatchStatusText.text != "Searching for a match...")
-            {
-                quickMatchStatusText.text = "Searching for a match...";
-            }
-
-            // Periodic LAN scan every 5s.
+            // Periodic scan every 5s.
             if (elapsed >= nextScanAt)
             {
                 nextScanAt += 5f;
@@ -401,7 +418,7 @@ public class LobbyUIController : MonoBehaviour
         }
     }
 
-    /// <summary>Callback for QuickMatch LAN scans — joins the first open room found.</summary>
+    /// <summary>Callback for QuickMatch scans — joins the first open room found.</summary>
     private void TryJoinFromQuickMatch(List<DiscoveredRoom> rooms)
     {
         if (!quickMatchActive || NetworkClient.active) return;
