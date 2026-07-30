@@ -99,7 +99,7 @@ GameObject:
   serializedVersion: 6
   m_Component:
   - component: {fileID: 2607045538943358698}
-  m_Layer: 0
+  m_Layer: 6
   m_Name: WheelsColliders
   m_TagString: Untagged
   m_Icon: {fileID: 0}
@@ -362,7 +362,7 @@ GameObject:
   - component: {fileID: 1283739479637717085}
   - component: {fileID: -9212446877912255144}
   - component: {fileID: 3639480849400796355}
-  m_Layer: 0
+  m_Layer: 6
   m_Name: Car
   m_TagString: Untagged
   m_Icon: {fileID: 0}
@@ -465,6 +465,9 @@ MonoBehaviour:
   networkSendRate: 1
   correctionSnapThreshold: 8
   correctionLerpSpeed: 10
+  positionDeadzone: 0.4
+  rotationDeadzoneDeg: 2
+  clientAuthGrace: 0.25
   SyncedSpeedKmh: 0
 --- !u!114 &6146257441794110455
 MonoBehaviour:
@@ -862,7 +865,7 @@ GameObject:
   m_Component:
   - component: {fileID: 2784892186000375594}
   - component: {fileID: 870336264953677646}
-  m_Layer: 0
+  m_Layer: 6
   m_Name: Wheel_Rear_Right
   m_TagString: Untagged
   m_Icon: {fileID: 0}
@@ -1045,7 +1048,7 @@ GameObject:
   m_Component:
   - component: {fileID: 4651133031740367140}
   - component: {fileID: 7087129086091276938}
-  m_Layer: 0
+  m_Layer: 6
   m_Name: Wheel_Front_Left
   m_TagString: Untagged
   m_Icon: {fileID: 0}
@@ -1735,6 +1738,12 @@ MonoBehaviour:
   fovSmoothSpeed: 5
   mouseSensitivity: 0.15
   lockCursor: 1
+  distancePresets:
+  - 6
+  - 10
+  - 14
+  cycleDistanceKey: 36
+  distanceLerpSpeed: 8
 --- !u!1 &5722031544901971911
 GameObject:
   m_ObjectHideFlags: 0
@@ -1820,7 +1829,7 @@ GameObject:
   m_Component:
   - component: {fileID: 949962414135496879}
   - component: {fileID: 1012566346895460598}
-  m_Layer: 0
+  m_Layer: 6
   m_Name: Wheel_Rear_Left
   m_TagString: Untagged
   m_Icon: {fileID: 0}
@@ -2229,7 +2238,7 @@ GameObject:
   m_Component:
   - component: {fileID: 7941985701729447364}
   - component: {fileID: 1527793139382442769}
-  m_Layer: 0
+  m_Layer: 6
   m_Name: Wheel_Front_Right
   m_TagString: Untagged
   m_Icon: {fileID: 0}

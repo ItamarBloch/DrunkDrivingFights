@@ -65,6 +65,13 @@ public class CarController : NetworkBehaviour
     [Tooltip("Rotational divergence below this (degrees) is ignored.")]
     [SerializeField] private float rotationDeadzoneDeg = 2f;
 
+    [Tooltip("Seconds the owner stays client-AUTHORITATIVE after it was last 'unstable' — i.e. " +
+             "touching a wall/obstacle OR airborne. In those states client and server physics " +
+             "diverge fast; while authoritative the owner reports its own state and the server " +
+             "follows it, so a mispredicted collision can't explode and air control isn't fought. " +
+             "Stable grounded driving stays server-authoritative and is unaffected.")]
+    [SerializeField] private float clientAuthGrace = 0.25f;
+
     // ── Subsystems ──────────────────────────────────────────
 
     private CarInputHandler _inputHandler;
@@ -135,6 +142,27 @@ public class CarController : NetworkBehaviour
     // reconcile, decayed every OwnerPredictionTick). Smooth, not instantaneous.
     private Vector3    _posError;
     private Quaternion _rotError = Quaternion.identity;
+
+    // ── Wall-Contact Client Authority ───────────────────────
+    // The owner-client goes AUTHORITATIVE while its body is touching geometry (detected
+    // locally via OnCollision — instant, no RTT). While authoritative it reports its own
+    // pose and ignores server corrections; the server just holds+relays that pose. This
+    // is what stops a mispredicted wall hit from being "corrected" into an explosion, and
+    // because the server is holding OUR pose the hand-back is seamless. Body colliders are
+    // frictionless and the ground rides on raycast WheelColliders (no collision events),
+    // so any OnCollision is an obstacle hit, never the ground.
+
+    // Owner-client: > 0 while authoritative (refreshed each contact tick, then counts down).
+    private float _ownerAuthTimer;
+    private bool OwnerAuthActive => _ownerAuthTimer > 0f;
+
+    // Server copy: latest client-authoritative state + a grace fallback. Superseded the
+    // instant a normal input arrives (see CmdSendInput), which is the real hand-back signal.
+    private Vector3    _authPos, _authVel, _authAngVel;
+    private Quaternion _authRot = Quaternion.identity;
+    private uint       _authSeq;
+    private float      _serverAuthTimer;
+    private bool ServerAuthActive => _serverAuthTimer > 0f;
 
     // ── Death / Freeze State ────────────────────────────────
 
@@ -309,6 +337,37 @@ public class CarController : NetworkBehaviour
 
     private void ServerTick()
     {
+        if (ServerAuthActive)
+        {
+            _serverAuthTimer -= Time.fixedDeltaTime;
+
+            // Client is authoritative (wall contact). Hold the body at the client-reported
+            // pose so hit queries (rockets, kill zones) stay correct, and relay that exact
+            // pose to remotes. Run NO local physics — the divergent server sim is precisely
+            // what used to fight the client and explode. We broadcast the clean _auth values
+            // (not the rigidbody) so any sub-tick suspension jitter never reaches remotes.
+            _rb.position        = _authPos;
+            _rb.rotation        = _authRot;
+            _rb.linearVelocity  = _authVel;
+            _rb.angularVelocity = _authAngVel;
+            _lastAppliedSeq     = _authSeq;
+
+            _tickCounter++;
+            if (_tickCounter >= networkSendRate)
+            {
+                _tickCounter = 0;
+                RpcReceiveState(new CarNetworkState
+                {
+                    Position              = _authPos,
+                    Rotation              = _authRot,
+                    Velocity              = _authVel,
+                    Timestamp             = NetworkTime.time,
+                    LastProcessedInputSeq = _authSeq
+                });
+            }
+            return;
+        }
+
         CarInputData input = _serverInput;
 
         _motor.Tick(input);
@@ -359,17 +418,34 @@ public class CarController : NetworkBehaviour
 
     private void OwnerPredictionTick()
     {
-        // Record where prediction currently sits BEFORE this step integrates,
-        // then bleed off any outstanding correction. ApplyOwnerCorrection also
-        // shifts the freshly-recorded entry, so history stays in the corrected
-        // frame and the next snapshot doesn't re-measure error we already fixed.
-        RecordPredictedPose();
-        ApplyOwnerCorrection();
+        if (_ownerAuthTimer > 0f) _ownerAuthTimer -= Time.fixedDeltaTime;
 
-        // Stamp + send one input per FixedUpdate. The Sequence lets the server reject
-        // stale/reordered inputs (see CmdSendInput) — it applies the newest immediately.
+        // Airborne is "unstable" too (air control diverges fast with nothing to anchor it),
+        // so stay client-authoritative while off the ground. Uses last tick's airborne flag;
+        // the grace window covers the landing settle before handing back to the server.
+        if (_airControl.IsAirborne) RefreshClientAuth();
+
+        // Record where prediction currently sits BEFORE this step integrates. In normal
+        // mode we then bleed off any outstanding correction (ApplyOwnerCorrection also
+        // shifts the freshly-recorded entry so history stays in the corrected frame).
+        RecordPredictedPose();
+
+        // Stamp one sequence per FixedUpdate (shared by input and auth-state messages so
+        // the server's stale-packet guard works across the mode boundary).
         _localInput.Sequence = ++_inputSequence;
-        CmdSendInput(_localInput);
+
+        if (OwnerAuthActive)
+        {
+            // Wall contact: WE are authoritative. Do NOT apply server corrections (that is
+            // what shoved the body into the wall). Report our own pose so the server and all
+            // remotes follow us — making the eventual hand-back seamless.
+            CmdSendAuthState(_rb.position, _rb.rotation, _rb.linearVelocity, _rb.angularVelocity, _localInput.Sequence);
+        }
+        else
+        {
+            ApplyOwnerCorrection();
+            CmdSendInput(_localInput);
+        }
 
         _motor.Tick(_localInput);
         _airControl.Tick(ToAerialInput(_localInput));
@@ -533,6 +609,34 @@ public class CarController : NetworkBehaviour
     }
 
     // ════════════════════════════════════════════════════════
+    //  CLIENT AUTHORITY (owner-client, while "unstable")
+    // ════════════════════════════════════════════════════════
+    // The owner goes authoritative whenever it is NOT stably grounded — touching a
+    // wall/obstacle, or airborne — because that is exactly when client and server physics
+    // diverge fast. Collisions are caught via OnCollision* (child body colliders forward
+    // their callbacks here); the airborne case is refreshed each tick in OwnerPredictionTick.
+    // Only the owner-client switches — the host is already authoritative locally, and the
+    // server copy switches only when it receives CmdSendAuthState.
+
+    private void OnCollisionEnter(Collision collision) => RefreshClientAuth();
+    private void OnCollisionStay(Collision collision)  => RefreshClientAuth();
+
+    /// <summary>Refresh the owner's client-authoritative window. Safe to call every tick.</summary>
+    private void RefreshClientAuth()
+    {
+        if (!isOwned || isServer) return;   // owner-client only (never host or dedicated server)
+
+        if (!OwnerAuthActive)
+        {
+            // Entering authority: drop any pending server correction so it can't yank us on the
+            // way in. RpcReceiveState won't set a new one while we're authoritative.
+            _posError = Vector3.zero;
+            _rotError = Quaternion.identity;
+        }
+        _ownerAuthTimer = clientAuthGrace;
+    }
+
+    // ════════════════════════════════════════════════════════
     //  NETWORK MESSAGES
     // ════════════════════════════════════════════════════════
 
@@ -546,6 +650,36 @@ public class CarController : NetworkBehaviour
         _lastInputSeq = input.Sequence;
         _hasReceivedInput = true;
         _serverInput = input;
+
+        // A normal input means the client has left wall-auth mode → resume simulating from
+        // the pose we were holding (which is where the client actually is), so there is no
+        // gap to snap. This is the primary hand-back trigger; _serverAuthTimer is only a
+        // fallback in case the resuming input is lost.
+        _serverAuthTimer = 0f;
+    }
+
+    /// <summary>
+    /// Owner → server while the owner is wall-contact authoritative. The server adopts this
+    /// pose as truth (holds + relays it) instead of running its own divergent simulation.
+    /// </summary>
+    [Command(channel = Channels.Unreliable)]
+    private void CmdSendAuthState(Vector3 pos, Quaternion rot, Vector3 vel, Vector3 angVel, uint seq)
+    {
+        // Same monotonic sequence as input, so a late/reordered auth packet can't overwrite
+        // a newer one (and can't override a fresher normal input after hand-back).
+        if (_hasReceivedInput && seq <= _lastInputSeq) return;
+        _lastInputSeq     = seq;
+        _hasReceivedInput = true;
+
+        _authPos    = pos;
+        _authRot    = rot;
+        _authVel    = vel;
+        _authAngVel = angVel;
+        _authSeq    = seq;
+
+        // Fallback only — the real hand-back is the next normal input (see CmdSendInput).
+        // Kept longer than the owner's send window so we never resume mid-contact.
+        _serverAuthTimer = clientAuthGrace + 0.25f;
     }
 
     [ClientRpc(channel = Channels.Unreliable)]
@@ -561,6 +695,10 @@ public class CarController : NetworkBehaviour
 
         if (isOwned)
         {
+            // While wall-contact authoritative, ignore server corrections entirely — WE are
+            // the source of truth and the server is only echoing our own pose back.
+            if (OwnerAuthActive) return;
+
             // Owner: reconcile against same-time prediction history. No forward
             // extrapolation here — we don't want to project the snapshot to "now";
             // OwnerReconcile compares it to where WE were at its own timestamp.

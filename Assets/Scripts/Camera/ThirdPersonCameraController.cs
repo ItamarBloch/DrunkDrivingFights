@@ -214,7 +214,10 @@ public class ThirdPersonCameraController : NetworkBehaviour
         if (enableCollision)
         {
             var deoccluder = vcamGO.AddComponent<CinemachineDeoccluder>();
-            deoccluder.CollideAgainst = collisionLayers;
+            // Exclude the car's OWN collider layers so the Deoccluder never treats the
+            // player's own body as an obstacle — that self-collision is what yanked the
+            // camera in/out ("really close then flies away") while tumbling in the air.
+            deoccluder.CollideAgainst = collisionLayers & ~GetCarOwnCollisionLayers();
             deoccluder.MinimumDistanceFromTarget = 0.3f;
 
             if (!string.IsNullOrEmpty(ignoreCollisionTag))
@@ -280,6 +283,27 @@ public class ThirdPersonCameraController : NetworkBehaviour
                 cam.gameObject.SetActive(false);
             }
         }
+    }
+
+    /// <summary>
+    /// Layer mask of the car's own body colliders that sit on a dedicated layer, so the
+    /// camera's Deoccluder can be told to ignore them. Default (layer 0) is deliberately
+    /// NOT excluded — world geometry shares it, and the camera must still avoid real walls.
+    /// Put the car's body collider(s) on any non-Default layer and this picks it up
+    /// automatically; leave them on Default and nothing changes (safe no-op).
+    /// WheelColliders are skipped (they aren't hit by the camera's occlusion rays).
+    /// </summary>
+    private int GetCarOwnCollisionLayers()
+    {
+        int mask = 0;
+        foreach (Collider col in GetComponentsInChildren<Collider>(true))
+        {
+            if (col is WheelCollider) continue;
+            int layer = col.gameObject.layer;
+            if (layer == 0) continue; // Default is shared with the world — keep avoiding it
+            mask |= 1 << layer;
+        }
+        return mask;
     }
 
     // ──────────────────────────────────────────────
